@@ -1,26 +1,33 @@
 {
-  "name": "paddock-scaffold",
+  "name": "paddock",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "backfill:races": "node --env-file=.env.local --import tsx scripts/backfill-races.mts",
+    "backfill:pets": "node --env-file=.env.local --import tsx scripts/backfill-pets.mts",
+    "verify:phase1": "node --env-file=.env.local --import tsx scripts/verify-phase1.mts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.108.1",
+    "next": "14.2.35",
     "react": "^18",
     "react-dom": "^18",
-    "next": "14.2.35"
+    "viem": "^2.52.2"
   },
   "devDependencies": {
-    "typescript": "^5",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.35",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
-    "eslint": "^8",
-    "eslint-config-next": "14.2.35"
+    "tsx": "^4.22.4",
+    "typescript": "^5"
   }
 }
