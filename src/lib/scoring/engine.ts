@@ -194,12 +194,15 @@ export function trackFit(pet: PetInput): { fit: TrackFit; best: TrackLength } {
     let traitPart = 0;
     for (const t of pet.traits) {
       const edge = liftEdge(traitLiftAt(t.id, track));
-      // Revealed tier scales the effect; unrevealed presence still counts, muted.
-      const weight = t.tier !== null ? t.tier / 3 : 0.5;
+      // Carrying a trait is known from birth, so presence always counts. A
+      // revealed star level scales the magnitude up and must never count for
+      // less than an unknown tier: tier 1 -> 0.6, tier 3 -> 1.0, unknown -> 0.55.
+      const weight =
+        t.tier !== null ? 0.6 + 0.4 * ((t.tier - 1) / 2) : 0.55;
       traitPart += edge * weight;
     }
 
-    const score = 0.6 * statScore + 0.4 * clamp01(0.5 + traitPart);
+    const score = 0.55 * statScore + 0.45 * clamp01(0.5 + traitPart);
     fit[track] = 100 * clamp01(score);
   }
   let best: TrackLength = TRACK_LENGTHS[0];
