@@ -10,7 +10,9 @@
     "backfill:races": "node --env-file=.env.local --import tsx scripts/backfill-races.mts",
     "backfill:pets": "node --env-file=.env.local --import tsx scripts/backfill-pets.mts",
     "verify:phase1": "node --env-file=.env.local --import tsx scripts/verify-phase1.mts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "materialize": "node --env-file=.env.local --import tsx scripts/materialize-scores.mts",
+    "verify:phase2": "node --env-file=.env.local --import tsx scripts/verify-phase2.mts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.1",
