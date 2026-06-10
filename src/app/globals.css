@@ -2,26 +2,160 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Paddock design system. Editorial-meets-terminal: serif headlines, mono data,
+  generous whitespace, dotted-grid texture, the Patch Notes asterisk motif.
+  Dark aurora is the default; light cream paper is the toggle.
+*/
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Brand accents (constant across themes) */
+  --brick: #9c2a2a;
+  --glow: #e8694f;
+  --gold: #e6bc5c;
+  --cyan: #6fb7c4;
+  --green: #9fbe6a;
+
+  /* Dark mode (default): warm near-black ink, cream type */
+  --paper: #14110f;
+  --paper-raised: #1a1715;
+  --paper-sunken: #100d0c;
+  --ink: #faf5ed;
+  --ink-soft: #c9bfb2;
+  --ink-faint: #8a8073;
+  --line: rgba(250, 245, 237, 0.1);
+  --line-strong: rgba(250, 245, 237, 0.18);
+  --dot: rgba(250, 245, 237, 0.06);
+  --aurora-1: rgba(232, 105, 79, 0.12);
+  --aurora-2: rgba(111, 183, 196, 0.1);
+  --aurora-3: rgba(230, 188, 92, 0.07);
+  --star: rgba(250, 245, 237, 0.55);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+:root[data-theme="light"] {
+  --paper: #faf5ed;
+  --paper-raised: #ffffff;
+  --paper-sunken: #f5f0e8;
+  --ink: #1a1715;
+  --ink-soft: #4f463c;
+  --ink-faint: #8a8073;
+  --line: rgba(26, 23, 21, 0.12);
+  --line-strong: rgba(26, 23, 21, 0.22);
+  --dot: rgba(26, 23, 21, 0.08);
+  --aurora-1: rgba(232, 105, 79, 0.08);
+  --aurora-2: rgba(111, 183, 196, 0.08);
+  --aurora-3: rgba(230, 188, 92, 0.08);
+  --star: rgba(26, 23, 21, 0.25);
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-serif), Georgia, "Times New Roman", serif;
+    font-size: 1.0625rem;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-serif), Georgia, serif;
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+  }
+
+  /* Labels, data, numbers: the terminal half of the system */
+  .mono, code, kbd, th, .label, .data {
+    font-family: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  ::selection {
+    background: var(--glow);
+    color: #14110f;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  /* Uppercase mono eyebrow label */
+  .eyebrow {
+    font-family: var(--font-mono), monospace;
+    font-size: 0.6875rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* The Patch Notes asterisk motif */
+  .asterisk {
+    color: var(--brick);
+    font-family: var(--font-serif), serif;
+  }
+
+  /* Card surface */
+  .panel {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+  }
+
+  /* Tabular numbers helper */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  /* Dotted-grid texture, for section backgrounds */
+  .bg-dotgrid {
+    background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  /* Dark aurora wash + faint starfield, layered. Use on the page shell. */
+  .bg-aurora {
+    background-color: var(--paper);
+    background-image:
+      radial-gradient(60rem 40rem at 12% -10%, var(--aurora-1), transparent 60%),
+      radial-gradient(50rem 36rem at 90% 0%, var(--aurora-2), transparent 55%),
+      radial-gradient(70rem 50rem at 50% 110%, var(--aurora-3), transparent 60%);
+    background-attachment: fixed;
+  }
+
+  .bg-starfield {
+    background-image:
+      radial-gradient(1px 1px at 20% 30%, var(--star), transparent),
+      radial-gradient(1px 1px at 75% 18%, var(--star), transparent),
+      radial-gradient(1px 1px at 42% 62%, var(--star), transparent),
+      radial-gradient(1px 1px at 88% 71%, var(--star), transparent),
+      radial-gradient(1px 1px at 60% 42%, var(--star), transparent),
+      radial-gradient(1px 1px at 9% 78%, var(--star), transparent),
+      radial-gradient(1px 1px at 33% 12%, var(--star), transparent);
+    background-repeat: no-repeat;
+  }
+
+  .hairline {
+    border-color: var(--line);
+  }
+  .hairline-strong {
+    border-color: var(--line-strong);
   }
 }
