@@ -34,3 +34,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Private context handoff (personal info; never commit)
+PADDOCK_MASTER_CONTEXT.md
