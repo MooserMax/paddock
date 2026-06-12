@@ -85,6 +85,33 @@ The signer MUST reject, and never construct, any of the following:
   single, manual confirmation showing exact ETH + USD.
 - Per-transaction wallet approval only. No batch pre-authorization, no session keys.
 
+## How to re-verify (one command each)
+The evidence above is regenerated on demand by two read-only, keyless scripts. They
+ONLY read (decode txs, read verified source, query approvals); they never sign, send,
+or load a private key. Each prints a single PASS or FAIL.
+
+```
+# 1. Decode a FRESH free-race joinRace entry (re-discovered each run, not hardcoded),
+#    confirm 0 ETH and zero token movement, and re-read the verified joinRace source
+#    to assert ownerOf is the only NFT interaction.
+node scripts/contract-forensics.mjs
+
+# 2. List the wallet's current net setApprovalForAll operators on the Giglings
+#    collection and confirm the racing contract is NOT among them.
+node scripts/approval-forensics.mjs [walletAddress]
+```
+
+Both run with zero configuration against the public Abstract RPC. Optional environment
+variables (never hardcoded, never committed; see .env.example):
+- `ABSTRACT_RPC_URL` your own Abstract RPC endpoint (default: public mainnet RPC)
+- `ABSCAN_API_KEY` Etherscan V2 key to fetch verified source via API instead of the
+  keyless explorer page
+- `FORENSICS_WALLET` / first CLI arg: the wallet to audit in script 2
+- `APPROVAL_START_BLOCK` first block to scan for approvals (default: 67000000)
+
+A nonzero exit code means a check failed: something changed, re-verify before trusting
+the auto-racer.
+
 ## Re-verification triggers
 Re-run the full analysis (decode a fresh free-race entry tx + re-read joinRace source)
 if any of these change: the PetRacingSystem address, its verified source hash, or the
