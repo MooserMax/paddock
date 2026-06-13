@@ -65,11 +65,7 @@ export default function StatRangeBar({
             : `${label} unrevealed`
         }
       >
-        {/* tick at the population-typical midpoint (75) for reference */}
-        <div
-          className="absolute top-1/2 h-3 w-px -translate-y-1/2"
-          style={{ left: "50%", background: "var(--line-strong)" }}
-        />
+        {/* No midpoint marker: this bar shows a range, never a claimed single value. */}
         <div
           className="absolute top-1/2 h-2.5 -translate-y-1/2 rounded-full"
           style={{

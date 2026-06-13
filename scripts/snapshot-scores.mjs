@@ -23,6 +23,41 @@ for (let from = 0; ; from += PAGE) {
 
 const num = (x) => (x === null || x === undefined ? 0 : Number(x));
 const sum = (k) => all.reduce((a, r) => a + num(r[k]), 0);
+
+// Per-pet ELO is a Gigaverse passthrough stored on pets.elo (not computed by us).
+// Per-pet earnings is an on-request aggregate over race_entries.payout_wei. Neither
+// lives in pet_scores, so cover them here with their own paginated readers.
+async function paginate(table, select, perRow) {
+  let total = 0;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db.from(table).select(select).order("id" in perRow ? "id" : table === "pets" ? "id" : "race_id", { ascending: true }).range(from, from + PAGE - 1);
+    if (error) throw new Error(`${table}: ${error.message}`);
+    if (!data || data.length === 0) break;
+    for (const r of data) total = perRow(total, r);
+    if (data.length < PAGE) break;
+  }
+  return total;
+}
+
+const sumElo = await paginate("pets", "id, elo", (t, r) => t + (r.elo === null ? 0 : Number(r.elo)));
+let entriesScanned = 0;
+const sumEarningsWei = await (async () => {
+  let total = 0;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from("race_entries")
+      .select("pet_id, payout_wei")
+      .not("payout_wei", "is", null)
+      .gt("payout_wei", 0)
+      .order("race_id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`race_entries: ${error.message}`);
+    if (!data || data.length === 0) break;
+    for (const r of data) { total += Number(r.payout_wei); entriesScanned++; }
+    if (data.length < PAGE) break;
+  }
+  return total;
+})();
 const nonThin = all.filter((r) => r.valuation_comps && r.valuation_comps.thin === false).length;
 
 const byCQ = [...all].sort((a, b) => num(b.confirmed_quality) - num(a.confirmed_quality)).slice(0, 15);
@@ -33,6 +68,9 @@ const out = {
   count: all.length,
   sumConfirmed: Number(sum("confirmed_quality").toFixed(3)),
   sumUpside: Number(sum("upside").toFixed(3)),
+  sumElo: Number(sumElo.toFixed(0)),
+  sumEarningsEth: Number((sumEarningsWei / 1e18).toFixed(6)),
+  paidEntriesScanned: entriesScanned,
   nonThinValuations: nonThin,
   bestDistanceHistogram: all.reduce((h, r) => { h[r.best_distance] = (h[r.best_distance] ?? 0) + 1; return h; }, {}),
   checkCases: checks.map((r) => ({ pet_id: r.pet_id, cq: num(r.confirmed_quality), upside: num(r.upside), best: r.best_distance, reveal: num(r.reveal_progress), valLow: r.valuation_low_eth, valHigh: r.valuation_high_eth })),

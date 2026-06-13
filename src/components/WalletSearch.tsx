@@ -46,8 +46,8 @@ export default function WalletSearch({ size = "lg", autoFocus = false }: { size?
         </div>
         <button
           type="submit"
-          className={`transition-paddock rounded-md font-medium text-paper hover:opacity-90 ${big ? "px-6 py-3.5" : "px-4 py-2.5"}`}
-          style={{ background: "var(--glow)", color: "#14110f" }}
+          className={`transition-paddock rounded-md font-medium hover:opacity-90 ${big ? "px-6 py-3.5" : "px-4 py-2.5"}`}
+          style={{ background: "var(--action)", color: "#14110f" }}
         >
           <span className="type-data" style={{ color: "#14110f" }}>Read the stable</span>
         </button>

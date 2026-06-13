@@ -149,8 +149,9 @@ export default async function PetPage({ params }: { params: { id: string } }) {
           </Panel>
         </div>
 
-        {/* Track fit + valuation + shark */}
-        <div className="space-y-6">
+        {/* Track fit + valuation + shark. Sticky on desktop so the shorter rail
+            follows the long stats column instead of leaving a void. */}
+        <div className="space-y-6 lg:sticky lg:top-20 lg:self-start">
           <Panel eyebrow="Track fit" title={`Best at ${d.scores.bestDistance}m`} note="From the study's trait-by-distance lifts and the revealed stat profile.">
             <TrackFitBars fit={d.scores.fit} best={d.scores.bestDistance} />
           </Panel>

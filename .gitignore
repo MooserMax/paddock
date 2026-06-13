@@ -37,3 +37,10 @@ next-env.d.ts
 
 # Private context handoff (personal info; never commit)
 PADDOCK_MASTER_CONTEXT.md
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/screenshots/

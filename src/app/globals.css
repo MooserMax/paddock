@@ -9,12 +9,15 @@
 */
 
 :root {
-  /* Brand accents (constant across themes) */
+  /* Brand accents (vivid; correct as text on the dark default) */
   --brick: #9c2a2a;
   --glow: #e8694f;
   --gold: #e6bc5c;
   --cyan: #6fb7c4;
   --green: #9fbe6a;
+  /* The primary-action fill stays vivid in both themes so its dark label keeps
+     contrast; it is the one accent used as a button background. */
+  --action: #e8694f;
 
   /* Dark mode (default): warm near-black ink, cream type */
   --paper: #14110f;
@@ -38,7 +41,14 @@
   --paper-sunken: #f5f0e8;
   --ink: #1a1715;
   --ink-soft: #4f463c;
-  --ink-faint: #8a8073;
+  --ink-faint: #6f655a;
+  /* Accents darkened to pass WCAG AA as text on cream/white (verified 4.5:1+).
+     Decorative fills inherit these too, which reads cleanly on cream. The
+     vivid --action token is preserved for the primary button background. */
+  --glow: #b23a22;
+  --gold: #8a6a12;
+  --cyan: #2a7a88;
+  --green: #5e7a2a;
   --line: rgba(26, 23, 21, 0.12);
   --line-strong: rgba(26, 23, 21, 0.22);
   --dot: rgba(26, 23, 21, 0.08);

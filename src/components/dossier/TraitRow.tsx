@@ -34,7 +34,9 @@ export default function TraitRow({ trait }: { trait: TraitDTO }) {
           >
             {lift.toFixed(2)}x
           </div>
-          <div className="type-micro uppercase text-ink-faint">study lift</div>
+          <div className="type-micro uppercase text-ink-faint" title="All-tracks win-rate lift from the study. Per-distance lifts (used in track fit) can differ.">
+            global lift
+          </div>
         </div>
       )}
     </div>

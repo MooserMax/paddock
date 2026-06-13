@@ -6,6 +6,11 @@ const DISTANCES = [500, 1200, 2400, 3000] as const;
 // Per-distance fit bars. The best distance is the headline; the bars extend the
 // StatRangeBar's visual logic so fit reads at a glance, not as a generic chart.
 export default function TrackFitBars({ fit, best }: { fit: TrackFitDTO; best: number }) {
+  // Detect a near-tie with the best distance so we can be honest that "best" is
+  // a close call. Ties break to the shorter distance (the engine's rule).
+  const sorted = DISTANCES.map((d) => fit[String(d) as keyof TrackFitDTO]).sort((a, b) => b - a);
+  const nearTie = sorted.length > 1 && sorted[0] - sorted[1] < 1.5;
+
   return (
     <div className="space-y-3">
       {DISTANCES.map((d) => {
@@ -34,6 +39,11 @@ export default function TrackFitBars({ fit, best }: { fit: TrackFitDTO; best: nu
           </div>
         );
       })}
+      {nearTie && (
+        <p className="type-micro normal-case text-ink-faint">
+          Near-tie at the top: the shorter distance is preferred when fits are this close.
+        </p>
+      )}
     </div>
   );
 }
