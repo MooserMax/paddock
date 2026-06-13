@@ -92,16 +92,23 @@ async function loadAllTraits(): Promise<Map<number, TraitRow[]>> {
 
 async function loadSales(): Promise<Map<number, { priceEth: number; soldAt: string }[]>> {
   const map = new Map<number, { priceEth: number; soldAt: string }[]>();
-  const { data, error } = await db()
-    .from("sales")
-    .select("token_id, price_eth, sold_at")
-    .not("price_eth", "is", null)
-    .order("sold_at", { ascending: false });
-  if (error) throw new Error(`sales load failed: ${error.message}`);
-  for (const row of data ?? []) {
-    const list = map.get(row.token_id as number) ?? [];
-    list.push({ priceEth: Number(row.price_eth), soldAt: row.sold_at as string });
-    map.set(row.token_id as number, list);
+  // Paginate: Supabase caps each response at 1000 rows. With the comp pool
+  // capped, valuation bands would silently narrow as the sales table grows.
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db()
+      .from("sales")
+      .select("token_id, price_eth, sold_at")
+      .not("price_eth", "is", null)
+      .order("sold_at", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`sales load failed: ${error.message}`);
+    for (const row of data ?? []) {
+      const list = map.get(row.token_id as number) ?? [];
+      list.push({ priceEth: Number(row.price_eth), soldAt: row.sold_at as string });
+      map.set(row.token_id as number, list);
+    }
+    if (!data || data.length < PAGE) break;
   }
   return map;
 }

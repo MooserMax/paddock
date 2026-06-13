@@ -414,7 +414,7 @@ export async function getOdds(id: number): Promise<OddsResponse | null> {
     entrants: results
       .map((r) => ({ petId: r.petId, name: nameById.get(r.petId) ?? null, winProbability: r.winProbability, strength: r.strength }))
       .sort((a, b) => b.winProbability - a.winProbability),
-    note: "Win probabilities from shrunk win rate, ELO, and track fit. Backtested and self-graded on the calibration page.",
+    note: "Win probabilities from shrunk win rate, ELO, and track fit. Model odds-v1 is live but NOT yet calibrated: the self-grading backtest over resolved races is pending and will publish at /calibration. Treat these as uncalibrated estimates until then.",
     meta: { source: SOURCE },
   };
 }
