@@ -8,7 +8,14 @@ import { MODEL_VERSION } from "../api/types";
 // softmax over the actual field, so probabilities always sum to 1.
 //
 // This is a probability product, not a betting product. It is backtested
-// against every resolved race and publishes its own calibration curve.
+// against resolved races and publishes its own calibration curve.
+//
+// LOCKED REQUIREMENT for the Surface 5 backtest (do not relax): calibration must
+// be OUT OF SAMPLE. Any weight fitting/tuning happens on races before a temporal
+// cutoff; the published calibration curve is computed ONLY on held-out races after
+// it. Walk-forward is preferred (races are time-ordered). The /calibration page
+// must state the split explicitly. In-sample calibration is a fabricated number
+// wearing a chart and does not ship.
 
 export interface OddsEntrantInput {
   petId: number;
