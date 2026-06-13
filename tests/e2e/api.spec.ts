@@ -87,9 +87,20 @@ test("GET /odds/race/[id] schema + probabilities sum to 1", async ({ request }) 
   const { res, body } = await getJson(request, "/odds/race/4000");
   expect(res.status()).toBe(200);
   expect(body.modelVersion).toBe("odds-v1");
-  expect(body.note).toContain("NOT yet calibrated");
+  expect(body.note.toLowerCase()).toContain("calibrat");
   const sum = body.entrants.reduce((a: number, e: { winProbability: number }) => a + e.winProbability, 0);
   expect(sum).toBeCloseTo(1, 3);
+});
+
+test("GET /calibration schema (out-of-sample backtest)", async ({ request }) => {
+  const { res, body } = await getJson(request, "/calibration");
+  expect(res.status()).toBe(200);
+  expect(body.split.method).toContain("walk-forward");
+  expect(body.split.testRaces).toBeGreaterThan(0);
+  expect(body.metrics.brier).toBeLessThan(body.metrics.baselineBrier); // beats uniform
+  expect(Array.isArray(body.buckets)).toBe(true);
+  expect(body.buckets[0]).toHaveProperty("predictedMean");
+  expect(body.buckets[0]).toHaveProperty("actualFreq");
 });
 
 test("GET /leaderboard schema (all metrics)", async ({ request }) => {

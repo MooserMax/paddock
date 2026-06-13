@@ -9,6 +9,9 @@ const PAGES = [
   { path: "/", name: "home", expect: "One verified engine" },
   { path: "/pet/6249", name: "dossier", expect: "Confirmed quality" },
   { path: `/wallet/${DEMO_WALLET}`, name: "wallet", expect: "Estimated stable value" },
+  { path: "/scanner?race=5667&mark=6249", name: "scanner", expect: "2 sharks and a top-2 payout" },
+  { path: "/races", name: "races", expect: "Recent races" },
+  { path: "/calibration", name: "calibration", expect: "The model grades itself" },
   { path: "/pet/99999999", name: "notfound", expect: "Off the track" },
   { path: "/wallet/not-an-address", name: "wallet-error", expect: "did not read" },
 ];

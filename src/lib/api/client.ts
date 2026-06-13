@@ -8,6 +8,7 @@ import type {
   LeaderboardMetric,
   SiteStats,
   RaceListResponse,
+  CalibrationResult,
   ApiError,
 } from "./types";
 
@@ -77,4 +78,5 @@ export const api = {
     apiGet<RaceListResponse>(`/races?limit=${limit}&offset=${offset}${track ? `&track=${track}` : ""}`, o ?? { revalidate: 30 }),
   scan: (petIds: number[], track: number, mark?: number, o?: FetchOpts) =>
     apiGet<RaceDetail>(`/scan?pets=${petIds.join(",")}&track=${track}${mark ? `&mark=${mark}` : ""}`, o ?? { revalidate: 0 }),
+  calibration: (o?: FetchOpts) => apiGet<CalibrationResult>(`/calibration`, o ?? { revalidate: 600 }),
 };

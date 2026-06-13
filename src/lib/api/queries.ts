@@ -421,7 +421,7 @@ export async function getOdds(id: number): Promise<OddsResponse | null> {
     entrants: results
       .map((r) => ({ petId: r.petId, name: nameById.get(r.petId) ?? null, winProbability: r.winProbability, strength: r.strength }))
       .sort((a, b) => b.winProbability - a.winProbability),
-    note: "Win probabilities from shrunk win rate, ELO, and track fit. Model odds-v1 is live but NOT yet calibrated: the self-grading backtest over resolved races is pending and will publish at /calibration. Treat these as uncalibrated estimates until then.",
+    note: "Win probabilities from shrunk win rate, ELO, and track fit. The win-rate core is calibrated out of sample at /calibration (well-calibrated below 50%, overconfident above); the ELO and track-fit components are current-only and remain uncalibrated. Treat high-confidence probabilities with caution.",
     meta: { source: SOURCE },
   };
 }
@@ -758,4 +758,15 @@ export async function getScan(petIds: number[], trackLength: number, markedPetId
     verdict,
     meta: { source: SOURCE, eloThreshold: threshold },
   };
+}
+
+// ---- Calibration (precomputed backtest, read-only) --------------------------
+import type { CalibrationResult } from "./types";
+
+export async function getCalibration(): Promise<CalibrationResult | null> {
+  const { data, error } = await db().from("sync_state").select("value, updated_at").eq("key", "calibration_v1").maybeSingle();
+  if (error) throw new Error(`calibration read failed: ${error.message}`);
+  if (!data?.value) return null;
+  const v = data.value as Omit<CalibrationResult, "generatedAt" | "meta">;
+  return { ...v, generatedAt: (data.updated_at as string) ?? null, meta: { source: SOURCE } };
 }

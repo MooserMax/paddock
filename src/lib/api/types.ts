@@ -220,6 +220,30 @@ export interface LeaderboardRow {
   earningsEth: number | null;
 }
 
+export interface CalibrationBucket {
+  lo: number;
+  hi: number;
+  predictedMean: number;
+  actualFreq: number;
+  count: number;
+}
+
+export interface CalibrationResult {
+  modelVersion: string;
+  scope: string;
+  split: { method: string; cutoffRaceId: number; trainRaces: number; testRaces: number; fittedBeta: number };
+  metrics: {
+    heldOutEntries: number;
+    brier: number;
+    baselineBrier: number;
+    logLoss: number;
+    fieldBaselineWinRate: number;
+  };
+  buckets: CalibrationBucket[];
+  generatedAt: string | null;
+  meta: { source: string };
+}
+
 export interface RaceListItem {
   raceId: number;
   trackLength: number | null;
