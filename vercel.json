@@ -2,8 +2,9 @@
   "crons": [
     { "path": "/api/cron/races", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/pets", "schedule": "*/5 * * * *" },
-    { "path": "/api/cron/sales", "schedule": "0 * * * *" },
     { "path": "/api/cron/eth-price", "schedule": "*/5 * * * *" },
-    { "path": "/api/cron/scores", "schedule": "*/15 * * * *" }
+    { "path": "/api/cron/sales", "schedule": "0 * * * *" },
+    { "path": "/api/cron/scores", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/calibration", "schedule": "0 6 * * *" }
   ]
 }

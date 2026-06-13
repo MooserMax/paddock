@@ -14,7 +14,9 @@ export default function ApiTryIt({ path, hero = false }: { path: string; hero?: 
 
   useEffect(() => { setOrigin(window.location.origin); }, []);
 
-  const curl = `curl ${origin || "https://paddock.bot"}/api/v1${path}`;
+  // Post-mount this is the real deployed origin so a copied curl works in prod;
+  // the pre-hydration fallback honors the configured site URL.
+  const curl = `curl ${origin || process.env.NEXT_PUBLIC_SITE_URL || "https://paddock.bot"}/api/v1${path}`;
 
   async function run() {
     setLoading(true);

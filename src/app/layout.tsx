@@ -16,7 +16,13 @@ const jetbrains = JetBrains_Mono({
   display: "swap",
 });
 
-const SITE = "https://paddock.bot";
+// Resolve the canonical origin so absolute og:image URLs are correct in prod.
+// Vercel injects these automatically; falls back to the configured site URL.
+const SITE =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`) ||
+  (process.env.VERCEL_URL && `https://${process.env.VERCEL_URL}`) ||
+  "https://paddock.bot";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
