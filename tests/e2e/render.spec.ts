@@ -12,6 +12,8 @@ const PAGES = [
   { path: "/scanner?race=5667&mark=6249", name: "scanner", expect: "2 sharks and a top-2 payout" },
   { path: "/races", name: "races", expect: "Recent races" },
   { path: "/calibration", name: "calibration", expect: "The model grades itself" },
+  { path: "/leaderboards", name: "leaderboards", expect: "Ranked from our database" },
+  { path: "/methodology", name: "methodology", expect: "How Paddock knows what it knows" },
   { path: "/pet/99999999", name: "notfound", expect: "Off the track" },
   { path: "/wallet/not-an-address", name: "wallet-error", expect: "did not read" },
 ];

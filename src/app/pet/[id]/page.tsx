@@ -176,7 +176,14 @@ export default async function PetPage({ params }: { params: { id: string } }) {
                 <p className="type-section text-ink">
                   {formatEth(d.valuation.lowEth, 3)} <span className="text-ink-faint">to</span> {formatEth(d.valuation.highEth, 3)}
                 </p>
-                <p className="type-micro mt-1 normal-case text-ink-faint">{d.valuation.note}</p>
+                {d.valuation.lowConfidence && (
+                  <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5" style={{ borderColor: "var(--gold)" }}>
+                    <span className="type-micro uppercase tracking-wider" style={{ color: "var(--gold)" }}>
+                      low confidence · {d.valuation.compCount} comps
+                    </span>
+                  </span>
+                )}
+                <p className="type-micro mt-1.5 normal-case text-ink-faint">{d.valuation.note}</p>
               </div>
             )}
           </Panel>

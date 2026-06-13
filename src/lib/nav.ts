@@ -13,8 +13,8 @@ export const NAV_ROUTES: NavRoute[] = [
   { href: "/wallet", label: "Wallet", ready: true },
   { href: "/races", label: "Races", ready: true },
   { href: "/scanner", label: "Scanner", ready: true },
-  { href: "/leaderboards", label: "Leaderboards", ready: false },
+  { href: "/leaderboards", label: "Leaderboards", ready: true },
   { href: "/calibration", label: "Odds", ready: true },
-  { href: "/methodology", label: "Methodology", ready: false },
+  { href: "/methodology", label: "Methodology", ready: true },
   { href: "/docs", label: "API", ready: false },
 ];

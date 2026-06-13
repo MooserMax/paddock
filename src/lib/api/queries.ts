@@ -152,6 +152,7 @@ export async function getPetDossier(id: number): Promise<PetDossier | null> {
       highEth: score?.valuation_high_eth ?? null,
       compCount: Array.isArray(valComps.comps) ? valComps.comps.length : 0,
       thin: valComps.thin ?? true,
+      lowConfidence: !(valComps.thin ?? true) && (Array.isArray(valComps.comps) ? valComps.comps.length : 0) < 5,
       note: valComps.note ?? "No valuation computed yet.",
     },
     recentRaces,

@@ -55,6 +55,8 @@ export interface ValuationBandDTO {
   highEth: number | null;
   compCount: number;
   thin: boolean;
+  // Below 5 comps the IQR band is shown but flagged low-confidence (thin is < 3).
+  lowConfidence: boolean;
   note: string;
 }
 

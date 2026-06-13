@@ -81,7 +81,7 @@ export default async function CalibrationPage() {
 
       <p className="type-micro mt-6 normal-case text-ink-faint">
         Model {cal.modelVersion}. Backtest computed {timeAgo(cal.generatedAt)}, served precomputed by{" "}
-        <Link href="/api/v1/calibration" className="underline transition-paddock hover:text-glow">/api/v1/calibration</Link>. Field baseline win rate {formatPct(m.fieldBaselineWinRate)}.
+        <Link href="/api/v1/calibration" className="underline transition-paddock hover:text-glow">/api/v1/calibration</Link>. Held-out field baseline win rate {formatPct(m.fieldBaselineWinRate, 1)}.
       </p>
     </div>
   );
