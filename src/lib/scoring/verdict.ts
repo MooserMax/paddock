@@ -5,11 +5,19 @@ import type { RaceEntrantDTO, VerdictDTO, VerdictBadge } from "../api/types";
 // quality is read from history; what it cannot know (real-time reveal state and
 // daily exhaustion) is stated plainly in the caveat, never papered over.
 
-// A shark is a proven, fearsome winner. Calibrated to the real distribution:
-// the highest shrunk win rate in the game is ~49% (Bayesian shrinkage toward the
-// 14.18% baseline makes 60% statistically unreachable), so a fixed 0.60 bar would
-// never fire. 0.30 marks the top ~1.6% of the field (65 of 4,061 racers), p98-p99
-// of shrunk win rate: rare enough to mean something, reachable enough to fire.
+// A shark is a proven, fearsome winner, flagged on SHRUNK win rate.
+//
+// History: the field autopsy proposed 0.60, but that was a RAW win rate. The
+// engine flags on the Bayesian-SHRUNK rate (different scale), where the highest
+// value in the game is ~49% and 0.60 is statistically unreachable, so the number
+// had to move; this is a conscious change, not an inherited one.
+//
+// Calibration: 0.30 marks the top ~1.6% of the field (65 of 4,061 racers, p98-p99).
+// Ratified OUT OF SAMPLE (scripts/validate-shark.mjs): walking races in order and
+// flagging on each horse's PRIOR record only, horses flagged at 0.30 went on to win
+// 50.9% of their next races vs a 14.9% field baseline (3.41x lift). The flag is
+// predictive, not cosmetic; the lift curve is smooth (0.28 -> 48.6%, 0.33 -> 53.5%),
+// so the threshold is robust anywhere in 0.28-0.33 and 0.30 is the clean choice.
 export const SHARK_WIN_RATE = 0.3;
 
 export interface VerdictContext {
