@@ -4,7 +4,11 @@ import { defineConfig } from "@playwright/test";
 // PADDOCK_URL. Two viewports: a true 380px mobile and a desktop reference.
 export default defineConfig({
   testDir: "./tests/e2e",
+  globalSetup: "./tests/e2e/global-setup.ts",
   fullyParallel: true,
+  // The signing-path and API tests must be deterministic; warmup removes the
+  // cold-compile flake, and a single retry covers any residual dev-server jitter.
+  retries: process.env.CI ? 2 : 1,
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: process.env.PADDOCK_URL || "http://localhost:3002",
