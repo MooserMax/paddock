@@ -30,3 +30,17 @@ test("theme toggle switches and persists", async ({ page }) => {
   await toggle.click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
+
+// Nav integrity: every link the nav actually renders must resolve to 200. Unbuilt
+// surfaces render as disabled spans (not links), so a dead nav link cannot ship.
+test("every rendered nav link returns 200", async ({ page, request }) => {
+  await page.goto("/");
+  const hrefs = await page.locator("header nav a").evaluateAll((els) =>
+    els.map((e) => (e as HTMLAnchorElement).getAttribute("href")).filter((h): h is string => !!h && h.startsWith("/"))
+  );
+  expect(hrefs.length).toBeGreaterThan(1);
+  for (const href of [...new Set(hrefs)]) {
+    const res = await request.get(href);
+    expect(res.status(), `nav link ${href}`).toBe(200);
+  }
+});

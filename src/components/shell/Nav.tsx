@@ -2,16 +2,7 @@ import Link from "next/link";
 import NavLink from "./NavLink";
 import ThemeToggle from "./ThemeToggle";
 import CommandTrigger from "./CommandTrigger";
-
-const LINKS = [
-  { href: "/wallet", label: "Wallet" },
-  { href: "/races", label: "Races" },
-  { href: "/scanner", label: "Scanner" },
-  { href: "/leaderboards", label: "Leaderboards" },
-  { href: "/calibration", label: "Odds" },
-  { href: "/methodology", label: "Methodology" },
-  { href: "/docs", label: "API" },
-];
+import { NAV_ROUTES } from "@/lib/nav";
 
 export default function Nav() {
   return (
@@ -25,11 +16,22 @@ export default function Nav() {
         </Link>
 
         <div className="hidden items-center gap-6 md:flex">
-          {LINKS.map((l) => (
-            <NavLink key={l.href} href={l.href}>
-              {l.label}
-            </NavLink>
-          ))}
+          {NAV_ROUTES.map((l) =>
+            l.ready ? (
+              <NavLink key={l.href} href={l.href}>
+                {l.label}
+              </NavLink>
+            ) : (
+              <span
+                key={l.href}
+                aria-disabled="true"
+                title="Coming soon"
+                className="type-micro cursor-not-allowed uppercase tracking-wider text-ink-faint opacity-40"
+              >
+                {l.label}
+              </span>
+            )
+          )}
         </div>
 
         <div className="flex items-center gap-2">

@@ -242,7 +242,14 @@ export async function getWalletSummary(address: string): Promise<WalletSummary> 
 
   const hatched = rows.filter((r) => r.hatched);
   const aTeam = [...hatched].sort((a, b) => Number(b.confirmed_quality) - Number(a.confirmed_quality)).slice(0, 5).map(toCard);
-  const hiddenGems = [...rows].sort((a, b) => Number(b.upside) - Number(a.upside)).slice(0, 5).map(toCard);
+  // Hidden gems exclude anything already proven on the A-team, so a horse never
+  // appears in both lists (which reads as a glitch).
+  const aTeamIds = new Set(aTeam.map((c) => c.id));
+  const hiddenGems = [...rows]
+    .filter((r) => !aTeamIds.has(r.id))
+    .sort((a, b) => Number(b.upside) - Number(a.upside))
+    .slice(0, 5)
+    .map(toCard);
 
   const revealQueue = [...rows]
     .filter((r) => r.next_milestone_in !== null)
@@ -552,9 +559,15 @@ async function scoresByIds(ids: number[]): Promise<Map<number, number>> {
   return new Map((data ?? []).map((s) => [s.pet_id as number, Number(s.confirmed_quality ?? 0)]));
 }
 
-async function earningsLeaderboardFallback(limit: number, offset: number, explanation: string): Promise<LeaderboardResponse> {
-  // Aggregate payouts across ALL paid entries. Supabase caps each response at
-  // 1000 rows, so page through them rather than truncating the leaderboard.
+// Earnings has no materialized column, so it is aggregated from race_entries.
+// To honor the no-compute-on-request rule, the full ranked aggregate is cached
+// server-side with a TTL; only a cache miss scans (paginated, ~2-3 pages). This
+// TTL is the documented earnings exception in the API docs.
+let earningsCache: { ranked: [number, number][]; at: number } | null = null;
+const EARNINGS_TTL_MS = 5 * 60_000;
+
+async function earningsRanked(): Promise<[number, number][]> {
+  if (earningsCache && Date.now() - earningsCache.at < EARNINGS_TTL_MS) return earningsCache.ranked;
   const totals = new Map<number, number>();
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
@@ -574,6 +587,12 @@ async function earningsLeaderboardFallback(limit: number, offset: number, explan
     if (!data || data.length < PAGE) break;
   }
   const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  earningsCache = { ranked, at: Date.now() };
+  return ranked;
+}
+
+async function earningsLeaderboardFallback(limit: number, offset: number, explanation: string): Promise<LeaderboardResponse> {
+  const ranked = await earningsRanked();
   const total = ranked.length;
   const pageIds = ranked.slice(offset, offset + limit);
   const ids = pageIds.map(([id]) => id);
@@ -600,7 +619,7 @@ export async function getSiteStats(): Promise<SiteStats> {
     const { count: n } = await q;
     return n ?? 0;
   };
-  const [racesResolved, racesCreated, totalPets, hatchedPets, sale, top, price] = await Promise.all([
+  const [racesResolved, racesCreated, totalPets, hatchedPets, sale, top, price, freshPet, raceScan] = await Promise.all([
     count("races", ["resolved", true]),
     count("races"),
     count("pets"),
@@ -608,6 +627,8 @@ export async function getSiteStats(): Promise<SiteStats> {
     db().from("sales").select("token_id, price_eth, sold_at").not("price_eth", "is", null).order("price_eth", { ascending: false }).limit(1).maybeSingle(),
     db().from("pet_scores").select("pet_id, confirmed_quality").order("confirmed_quality", { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
     db().from("eth_price").select("usd").eq("id", 1).maybeSingle(),
+    db().from("pets").select("last_synced_at").order("last_synced_at", { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
+    db().from("sync_state").select("updated_at").eq("key", "races_scan").maybeSingle(),
   ]);
 
   let topName: string | null = null;
@@ -624,6 +645,117 @@ export async function getSiteStats(): Promise<SiteStats> {
     recentBigSale: sale.data ? { tokenId: sale.data.token_id as number, priceEth: Number(sale.data.price_eth), soldAt: sale.data.sold_at as string } : null,
     topConfirmed: top.data ? { petId: top.data.pet_id as number, name: topName, confirmedQuality: Number(top.data.confirmed_quality) } : null,
     ethUsd: price.data ? Number(price.data.usd) : null,
+    petsSyncedAt: (freshPet.data?.last_synced_at as string) ?? null,
+    racesScannedAt: (raceScan.data?.updated_at as string) ?? null,
     meta: { source: SOURCE },
+  };
+}
+
+// ---- Races feed -------------------------------------------------------------
+import type { RaceListResponse, RaceListItem } from "./types";
+
+export async function getRecentRaces(track: number | null, limit: number, offset: number): Promise<RaceListResponse> {
+  let q = db()
+    .from("races")
+    .select("race_id, track_length, field_size, race_temp, resolved_at, payout_bps")
+    .eq("resolved", true)
+    .eq("hydrated", true)
+    .order("resolved_at", { ascending: false, nullsFirst: false })
+    .range(offset, offset + limit - 1);
+  if (track) q = q.eq("track_length", track);
+  const { data, error } = await q;
+  if (error) throw new Error(`races feed query failed: ${error.message}`);
+
+  const raceIds = (data ?? []).map((r) => r.race_id as number);
+  // Winner = finish_position 1 for each race, fetched in one query then mapped.
+  const { data: winners } = await db()
+    .from("race_entries")
+    .select("race_id, pet_id")
+    .in("race_id", raceIds.length ? raceIds : [-1])
+    .eq("finish_position", 1);
+  const winnerByRace = new Map((winners ?? []).map((w) => [w.race_id as number, w.pet_id as number]));
+  const winnerIds = [...new Set([...winnerByRace.values()])];
+  const { data: petNames } = await db().from("pets").select("id, name").in("id", winnerIds.length ? winnerIds : [-1]);
+  const nameById = new Map((petNames ?? []).map((p) => [p.id as number, p.name as string | null]));
+
+  const races: RaceListItem[] = (data ?? []).map((r) => {
+    const winnerPetId = winnerByRace.get(r.race_id as number) ?? null;
+    return {
+      raceId: r.race_id as number,
+      trackLength: r.track_length,
+      fieldSize: r.field_size,
+      raceTemp: r.race_temp,
+      resolvedAt: r.resolved_at,
+      payoutBps: (r.payout_bps as number[]) ?? null,
+      winnerPetId,
+      winnerName: winnerPetId != null ? nameById.get(winnerPetId) ?? null : null,
+    };
+  });
+
+  return { races, limit, offset, track, meta: { source: SOURCE } };
+}
+
+// ---- Live-lobby scan (arbitrary pet ids, not a stored race) -----------------
+export async function getScan(petIds: number[], trackLength: number, markedPetId?: number): Promise<RaceDetail> {
+  const ids = petIds.length ? petIds : [-1];
+  const [{ data: pets }, { data: traits }, { data: scores }, threshold] = await Promise.all([
+    db().from("pets").select("id, name, owner_address, wins, races_run, elo").in("id", ids),
+    db().from("pet_traits").select("pet_id, trait_id, trait_name, tier").in("pet_id", ids),
+    db().from("pet_scores").select("pet_id, best_distance, reveal_progress").in("pet_id", ids),
+    eloThreshold(),
+  ]);
+  const petById = new Map((pets ?? []).map((p) => [p.id, p]));
+  const scoreById = new Map((scores ?? []).map((s) => [s.pet_id, s]));
+  const traitsByPet = new Map<number, { id: string; name: string; tier: number }[]>();
+  for (const t of traits ?? []) {
+    if (t.tier === null) continue;
+    const list = traitsByPet.get(t.pet_id) ?? [];
+    list.push({ id: t.trait_id, name: t.trait_name ?? t.trait_id, tier: t.tier });
+    traitsByPet.set(t.pet_id, list);
+  }
+
+  // Preserve the caller's pet order; unknown ids are surfaced as empty entrants.
+  const entrants: RaceEntrantDTO[] = petIds.map((id) => {
+    const p = (petById.get(id) ?? {}) as Record<string, unknown>;
+    const s = scoreById.get(id);
+    const wins = Number(p.wins ?? 0);
+    const racesRun = Number(p.races_run ?? 0);
+    const shrunk = entrantShrunkWinRate(wins, racesRun);
+    const elo = p.elo != null ? Number(p.elo) : null;
+    return {
+      petId: id,
+      name: (p.name as string) ?? null,
+      ownerAddress: (p.owner_address as string) ?? null,
+      finishPosition: null,
+      shrunkWinRate: shrunk,
+      rawWinRate: racesRun ? wins / racesRun : null,
+      wins,
+      racesRun,
+      elo,
+      revealedTraits: traitsByPet.get(id) ?? [],
+      revealPct: Number(s?.reveal_progress ?? 0),
+      bestDistance: Number(s?.best_distance ?? 1200),
+      isShark: shrunk >= SHARK_WIN_RATE,
+      highElo: elo !== null && elo >= threshold,
+    };
+  });
+
+  // A live lobby has no announced payout, so the payout-trap signal is not
+  // assessable; the verdict leans on sharks, in-form horses, and your fit.
+  const verdict = computeVerdict(entrants, { payoutBps: null, eloThreshold: threshold, markedPetId, trackLength });
+
+  return {
+    raceId: 0,
+    trackLength,
+    raceTemp: null,
+    fieldSize: entrants.length,
+    entryFeeWei: null,
+    payoutBps: null,
+    feeBps: null,
+    resolved: false,
+    resolvedAt: null,
+    entrants,
+    verdict,
+    meta: { source: SOURCE, eloThreshold: threshold },
   };
 }

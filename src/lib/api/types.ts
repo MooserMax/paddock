@@ -220,6 +220,25 @@ export interface LeaderboardRow {
   earningsEth: number | null;
 }
 
+export interface RaceListItem {
+  raceId: number;
+  trackLength: number | null;
+  fieldSize: number | null;
+  raceTemp: string | null;
+  resolvedAt: string | null;
+  payoutBps: number[] | null;
+  winnerPetId: number | null;
+  winnerName: string | null;
+}
+
+export interface RaceListResponse {
+  races: RaceListItem[];
+  limit: number;
+  offset: number;
+  track: number | null;
+  meta: { source: string };
+}
+
 export interface SiteStats {
   racesResolved: number;
   racesCreated: number;
@@ -228,6 +247,8 @@ export interface SiteStats {
   recentBigSale: { tokenId: number; priceEth: number; soldAt: string } | null;
   topConfirmed: { petId: number; name: string | null; confirmedQuality: number } | null;
   ethUsd: number | null;
+  petsSyncedAt: string | null;
+  racesScannedAt: string | null;
   meta: { source: string };
 }
 

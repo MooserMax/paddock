@@ -5,7 +5,12 @@ import type { RaceEntrantDTO, VerdictDTO, VerdictBadge } from "../api/types";
 // quality is read from history; what it cannot know (real-time reveal state and
 // daily exhaustion) is stated plainly in the caveat, never papered over.
 
-export const SHARK_WIN_RATE = 0.6; // shrunk win rate at or above this is a shark
+// A shark is a proven, fearsome winner. Calibrated to the real distribution:
+// the highest shrunk win rate in the game is ~49% (Bayesian shrinkage toward the
+// 14.18% baseline makes 60% statistically unreachable), so a fixed 0.60 bar would
+// never fire. 0.30 marks the top ~1.6% of the field (65 of 4,061 racers), p98-p99
+// of shrunk win rate: rare enough to mean something, reachable enough to fire.
+export const SHARK_WIN_RATE = 0.3;
 
 export interface VerdictContext {
   payoutBps: number[] | null;
