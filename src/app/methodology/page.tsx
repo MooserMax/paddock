@@ -45,13 +45,13 @@ export default async function MethodologyPage() {
 
       <Section title="The study behind the scores" eyebrow="A full-population read">
         <p>
-          The scoring weights come from a study of every resolved race at the time: 4,537 races, 30,288 entries. The strongest single signal is raw stat quality: race winners average 3.8% above the field on all four stats. Among traits, Surger is the alpha: a 23.19% win rate when active versus a 14.18% baseline, a 1.63x lift. Volatile actively hurts, at 0.81x. Several traits change sign by distance, which is why track fit is computed per length rather than globally. Closer&apos;s edge, for example, appears only at 2400m and longer.
+          The scoring weights come from a study of every resolved race at the time: 4,537 races, 30,288 entries. The weights are frozen from that snapshot, so the constants stay fixed even as live data grows (now past 5,671 resolved races); 4,537 is the studied population, not a stale count. The strongest single signal is raw stat quality: race winners average 3.8% above the field on all four stats. Among traits, Surger is the alpha: a 23.19% win rate when active versus the study&apos;s 14.18% baseline, a 1.63x lift overall. Several traits change sign by distance, which is why track fit is computed per length rather than globally: Surger is 1.63x across all tracks but 1.69x at 1200m, and Closer&apos;s edge appears only at 2400m and longer.
         </p>
       </Section>
 
       <Section title="Confirmed quality, upside, and shrinkage" eyebrow="The two numbers">
         <p>
-          Confirmed quality uses only revealed information: revealed stat values, revealed trait star levels weighted by their study lift, and an actual win rate. Upside is the opposite: for unrevealed horses it reads rarity, the traits a horse carries from birth, and races remaining, and it is labeled potential, never proof. Win rate everywhere is Bayesian-shrunk toward the 14.9% population baseline, so a 2-for-3 horse does not outrank a 20-for-60 horse on three lucky races. The raw record is always shown beside the shrunk number.
+          Confirmed quality uses only revealed information: revealed stat values, revealed trait star levels weighted by their study lift, and an actual win rate. Upside is the opposite: for unrevealed horses it reads rarity, the traits a horse carries from birth, and races remaining, and it is labeled potential, never proof. Win rate everywhere is Bayesian-shrunk toward the study&apos;s 14.18% baseline, the same rate the study measured, so a 2-for-3 horse does not outrank a 20-for-60 horse on three lucky races. The raw record is always shown beside the shrunk number.
         </p>
       </Section>
 
@@ -82,7 +82,7 @@ export default async function MethodologyPage() {
               </tbody>
             </table>
             <p className="type-micro mt-2 normal-case text-ink-faint">
-              Flagged horses (at 0.30) win 50.9% of their next races versus a 14.9% baseline. Predictive, not cosmetic; the smooth gradient is the signature of real signal.
+              Flagged horses (at 0.30) win 50.9% of their next races versus the full-entry 14.9% baseline (the win rate across all finished entries, distinct from the study&apos;s 14.18%). Predictive, not cosmetic; the smooth gradient is the signature of real signal.
             </p>
           </div>
 
