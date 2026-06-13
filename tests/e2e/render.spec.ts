@@ -15,6 +15,7 @@ const PAGES = [
   { path: "/leaderboards", name: "leaderboards", expect: "Ranked from our database" },
   { path: "/methodology", name: "methodology", expect: "How Paddock knows what it knows" },
   { path: "/docs", name: "docs", expect: "The Paddock API" },
+  { path: "/auto-racer", name: "auto-racer", expect: "It cannot touch your assets" },
   { path: "/pet/99999999", name: "notfound", expect: "Off the track" },
   { path: "/wallet/not-an-address", name: "wallet-error", expect: "did not read" },
 ];
@@ -35,6 +36,17 @@ test("theme toggle switches and persists", async ({ page }) => {
   const toggle = page.getByRole("button", { name: /switch to cream theme/i });
   await toggle.click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
+// Auto-racer dry-run endpoint: builds joinRace, guard certifies it safe, signs nothing.
+test("auto-racer simulate certifies safe and never signs", async ({ request }) => {
+  const res = await request.get("/api/autoracer/simulate?race=5667&pet=6249");
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  expect(body.signed).toBe(false);
+  expect(body.safety.safe).toBe(true);
+  expect(body.safety.checks.every((c: { pass: boolean }) => c.pass)).toBe(true);
+  expect(body.intent.value).toBe("0");
 });
 
 // og:image cards render as real PNGs (the share engine).

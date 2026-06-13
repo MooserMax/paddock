@@ -123,7 +123,9 @@ export default async function MethodologyPage() {
 
       <Section title="Your assets never move" eyebrow="Safety">
         <p>
-          Paddock&apos;s read surfaces never touch a wallet. The optional auto-racer signs exactly one kind of transaction, a zero-value free-race entry, and the racing contract only reads ownership: it never transfers a Gigling and never needs an approval. This is proven on-chain, not asserted, with a committed analysis and a re-runnable forensics harness. The full write-up is in SECURITY.md in the repository.
+          Paddock&apos;s read surfaces never touch a wallet. The optional{" "}
+          <Link href="/auto-racer" className="underline transition-paddock hover:text-glow">auto-racer</Link>{" "}
+          signs exactly one kind of transaction, a zero-value free-race entry, and the racing contract only reads ownership: it never transfers a Gigling and never needs an approval. This is proven on-chain, not asserted, with a committed analysis, a re-runnable forensics harness, and a signer-rejection test that holds the safety guard to account. The full write-up is in SECURITY.md in the repository.
         </p>
       </Section>
 

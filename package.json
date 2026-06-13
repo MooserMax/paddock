@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "screenshots": "playwright test --project=mobile-380",
     "backtest:odds": "node --env-file=.env.local scripts/backtest-odds.mjs",
-    "validate:shark": "node --env-file=.env.local scripts/validate-shark.mjs"
+    "validate:shark": "node --env-file=.env.local scripts/validate-shark.mjs",
+    "test:signer": "node --import tsx scripts/signer-rejection-test.mts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.1",
