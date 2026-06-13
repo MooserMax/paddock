@@ -87,7 +87,17 @@ export interface PetDossier {
   };
   shark: SharkProfile;
   valuation: ValuationBandDTO;
+  recentRaces: RaceHistoryItem[];
   meta: { lastSyncedAt: string | null; source: string };
+}
+
+export interface RaceHistoryItem {
+  raceId: number;
+  finishPosition: number | null;
+  fieldSize: number | null;
+  trackLength: number | null;
+  resolvedAt: string | null;
+  payoutWei: string | null;
 }
 
 export interface PetCardDTO {
@@ -208,6 +218,17 @@ export interface LeaderboardRow {
   rawWinRate: number | null;
   racesRun: number;
   earningsEth: number | null;
+}
+
+export interface SiteStats {
+  racesResolved: number;
+  racesCreated: number;
+  totalPets: number;
+  hatchedPets: number;
+  recentBigSale: { tokenId: number; priceEth: number; soldAt: string } | null;
+  topConfirmed: { petId: number; name: string | null; confirmedQuality: number } | null;
+  ethUsd: number | null;
+  meta: { source: string };
 }
 
 export interface LeaderboardResponse {

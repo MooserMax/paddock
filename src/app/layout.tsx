@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Crimson_Pro, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import Nav from "@/components/shell/Nav";
+import Footer from "@/components/shell/Footer";
 
 const crimson = Crimson_Pro({
   subsets: ["latin"],
@@ -47,8 +49,12 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${crimson.variable} ${jetbrains.variable}`}>
-        {children}
+      <body className={`${crimson.variable} ${jetbrains.variable} bg-aurora`}>
+        <div className="flex min-h-screen flex-col">
+          <Nav />
+          <main className="flex-1">{children}</main>
+          <Footer />
+        </div>
       </body>
     </html>
   );

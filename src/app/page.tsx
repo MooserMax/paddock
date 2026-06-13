@@ -1,101 +1,118 @@
-import Image from "next/image";
+import Link from "next/link";
+import { api } from "@/lib/api/client";
+import type { SiteStats, LeaderboardResponse } from "@/lib/api/types";
+import WalletSearch from "@/components/WalletSearch";
+import RarityBadge from "@/components/RarityBadge";
+import { formatEth, formatInt, formatScore, formatPct } from "@/lib/format";
 
-export default function Home() {
+export const revalidate = 60;
+
+const FLAGSHIPS = [
+  { id: 6249, note: "Giga, Surger revealed" },
+  { id: 1971, note: "top confirmed quality" },
+  { id: 15874, note: "unrevealed Giga, all upside" },
+];
+
+export default async function Home() {
+  let stats: SiteStats | null = null;
+  let board: LeaderboardResponse | null = null;
+  try {
+    [stats, board] = await Promise.all([api.stats(), api.leaderboard("cq", 6)]);
+  } catch {
+    // The hero still renders without live numbers; never a blank crash.
+  }
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="https://nextjs.org/icons/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+    <div>
+      {/* Hero: the first five seconds. Alive, intelligent, one primary action. */}
+      <section className="relative overflow-hidden border-b hairline bg-starfield">
+        <div className="mx-auto max-w-page px-4 py-16 md:px-6 md:py-24">
+          <p className="eyebrow assemble">The open intelligence layer for Gigling Racing</p>
+          <h1 className="type-page-title assemble mt-3 max-w-3xl text-balance text-ink" style={{ animationDelay: "40ms" }}>
+            One verified engine. Every Gigling, graded. <span className="asterisk">Never a fabricated number.</span>
+          </h1>
+          <p className="type-body assemble mt-4 max-w-xl text-ink-soft" style={{ animationDelay: "80ms" }}>
+            Paste a wallet and read its stable like a scout: proven quality, hidden upside, which horse to race next, and what it is worth. Powered by a public API anyone can build on.
+          </p>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="https://nextjs.org/icons/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+          <div className="assemble mt-8 max-w-2xl" style={{ animationDelay: "120ms" }}>
+            <WalletSearch size="lg" />
+          </div>
+
+          {stats && (
+            <div className="assemble mt-10 flex flex-wrap items-center gap-x-8 gap-y-3" style={{ animationDelay: "160ms" }} aria-label="Live coverage">
+              <LiveStat value={formatInt(stats.racesResolved)} label="races resolved" pulse />
+              <LiveStat value={formatInt(stats.totalPets)} label="Giglings tracked" />
+              <LiveStat value={formatInt(stats.hatchedPets)} label="hatched racers" />
+              {stats.recentBigSale && <LiveStat value={formatEth(stats.recentBigSale.priceEth, 3)} label="top recent sale" />}
+            </div>
+          )}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      </section>
+
+      {/* Flagship dossiers: one click to a rich page, not a search box. */}
+      <section className="mx-auto max-w-page px-4 py-12 md:px-6">
+        <div className="mb-5 flex items-baseline justify-between">
+          <h2 className="type-section text-ink">Start with a flagship</h2>
+          <Link href="/leaderboards" className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">
+            All leaderboards
+          </Link>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {FLAGSHIPS.map((f) => (
+            <Link key={f.id} href={`/pet/${f.id}`} className="panel transition-paddock group flex items-center justify-between gap-3 p-4 hover:border-line-strong">
+              <div>
+                <p className="type-card-title text-ink">Gigling #{f.id}</p>
+                <p className="type-micro mt-0.5 normal-case text-ink-faint">{f.note}</p>
+              </div>
+              <span className="asterisk text-lg opacity-0 transition-paddock group-hover:opacity-100">{"→"}</span>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      {/* Top confirmed horses: the engine's headline output. */}
+      {board && board.rows.length > 0 && (
+        <section className="mx-auto max-w-page px-4 pb-16 md:px-6">
+          <div className="mb-5 flex items-baseline justify-between">
+            <div>
+              <p className="eyebrow">Confirmed quality, proven</p>
+              <h2 className="type-section text-ink">Best horses in the game right now</h2>
+            </div>
+            <Link href="/leaderboards" className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">
+              Full board
+            </Link>
+          </div>
+          <div className="overflow-hidden rounded-lg border hairline">
+            {board.rows.map((r, i) => (
+              <Link
+                key={r.petId}
+                href={`/pet/${r.petId}`}
+                className="transition-paddock flex items-center gap-4 border-b hairline px-4 py-3 last:border-0 hover:bg-paper-raised"
+                style={{ background: i % 2 ? "transparent" : "color-mix(in srgb, var(--paper-raised) 40%, transparent)" }}
+              >
+                <span className="type-data w-6 tabular-nums text-ink-faint">{r.rank}</span>
+                <span className="type-data flex-1 text-ink">{r.name ?? `#${r.petId}`}</span>
+                <RarityBadge rarity={r.rarity.value} size="sm" />
+                <span className="type-data hidden w-24 text-right tabular-nums text-ink-soft sm:block">elo {r.elo ?? "-"}</span>
+                <span className="type-data hidden w-24 text-right tabular-nums text-ink-soft sm:block">{formatPct(r.shrunkWinRate)} win</span>
+                <span className="type-data w-16 text-right tabular-nums" style={{ color: "var(--gold)" }}>{formatScore(r.value)}</span>
+              </Link>
+            ))}
+          </div>
+          <p className="type-micro mt-3 normal-case text-ink-faint">{board.meta.explanation}</p>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function LiveStat({ value, label, pulse = false }: { value: string; label: string; pulse?: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      {pulse && <span className="inline-block h-1.5 w-1.5 rounded-full animate-pulse-soft" style={{ background: "var(--green)" }} aria-hidden />}
+      <span className="type-data tabular-nums text-ink">{value}</span>
+      <span className="type-micro uppercase text-ink-faint">{label}</span>
     </div>
   );
 }

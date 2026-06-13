@@ -72,13 +72,37 @@ export async function eloThreshold(percentile = 0.9): Promise<number> {
 
 // ---- Pet dossier ------------------------------------------------------------
 export async function getPetDossier(id: number): Promise<PetDossier | null> {
-  const [{ data: pet, error: petErr }, { data: traits }, { data: score }] = await Promise.all([
+  const [{ data: pet, error: petErr }, { data: traits }, { data: score }, { data: history }] = await Promise.all([
     db().from("pets").select("*").eq("id", id).maybeSingle(),
     db().from("pet_traits").select("trait_id, trait_name, tier").eq("pet_id", id),
     db().from("pet_scores").select("*").eq("pet_id", id).maybeSingle(),
+    db()
+      .from("race_entries")
+      .select("race_id, finish_position, payout_wei")
+      .eq("pet_id", id)
+      .order("race_id", { ascending: false })
+      .limit(12),
   ]);
   if (petErr) throw new Error(`pet query failed: ${petErr.message}`);
   if (!pet) return null;
+
+  const historyRaceIds = (history ?? []).map((h) => h.race_id as number);
+  const { data: raceMeta } = await db()
+    .from("races")
+    .select("race_id, field_size, track_length, resolved_at")
+    .in("race_id", historyRaceIds.length ? historyRaceIds : [-1]);
+  const raceMetaById = new Map((raceMeta ?? []).map((r) => [r.race_id as number, r]));
+  const recentRaces = (history ?? []).map((h) => {
+    const r = raceMetaById.get(h.race_id as number);
+    return {
+      raceId: h.race_id as number,
+      finishPosition: h.finish_position ?? null,
+      fieldSize: r?.field_size ?? null,
+      trackLength: r?.track_length ?? null,
+      resolvedAt: r?.resolved_at ?? null,
+      payoutWei: h.payout_wei != null ? String(h.payout_wei) : null,
+    };
+  });
 
   const rawWinRate = pet.races_run ? pet.wins / pet.races_run : null;
   const valComps = (score?.valuation_comps ?? {}) as { thin?: boolean; note?: string; comps?: unknown[] };
@@ -130,6 +154,7 @@ export async function getPetDossier(id: number): Promise<PetDossier | null> {
       thin: valComps.thin ?? true,
       note: valComps.note ?? "No valuation computed yet.",
     },
+    recentRaces,
     meta: { lastSyncedAt: pet.last_synced_at, source: SOURCE },
   };
 }
@@ -562,5 +587,43 @@ async function earningsLeaderboardFallback(limit: number, offset: number, explan
       leaderboardRow(offset + i + 1, pets.get(id), id, wei / 1e18, scores.get(id) ?? 0, wei / 1e18)
     ),
     meta: { source: SOURCE, explanation },
+  };
+}
+
+// ---- Site stats (home headline) ---------------------------------------------
+import type { SiteStats } from "./types";
+
+export async function getSiteStats(): Promise<SiteStats> {
+  const count = async (table: string, filter?: [string, unknown]) => {
+    let q = db().from(table).select("*", { count: "exact", head: true });
+    if (filter) q = q.eq(filter[0], filter[1]);
+    const { count: n } = await q;
+    return n ?? 0;
+  };
+  const [racesResolved, racesCreated, totalPets, hatchedPets, sale, top, price] = await Promise.all([
+    count("races", ["resolved", true]),
+    count("races"),
+    count("pets"),
+    count("pets", ["hatched", true]),
+    db().from("sales").select("token_id, price_eth, sold_at").not("price_eth", "is", null).order("price_eth", { ascending: false }).limit(1).maybeSingle(),
+    db().from("pet_scores").select("pet_id, confirmed_quality").order("confirmed_quality", { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
+    db().from("eth_price").select("usd").eq("id", 1).maybeSingle(),
+  ]);
+
+  let topName: string | null = null;
+  if (top.data) {
+    const { data: p } = await db().from("pets").select("name").eq("id", top.data.pet_id).maybeSingle();
+    topName = p?.name ?? null;
+  }
+
+  return {
+    racesResolved,
+    racesCreated,
+    totalPets,
+    hatchedPets,
+    recentBigSale: sale.data ? { tokenId: sale.data.token_id as number, priceEth: Number(sale.data.price_eth), soldAt: sale.data.sold_at as string } : null,
+    topConfirmed: top.data ? { petId: top.data.pet_id as number, name: topName, confirmedQuality: Number(top.data.confirmed_quality) } : null,
+    ethUsd: price.data ? Number(price.data.usd) : null,
+    meta: { source: SOURCE },
   };
 }
