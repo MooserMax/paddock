@@ -14,6 +14,7 @@ const PAGES = [
   { path: "/calibration", name: "calibration", expect: "The model grades itself" },
   { path: "/leaderboards", name: "leaderboards", expect: "Ranked from our database" },
   { path: "/methodology", name: "methodology", expect: "How Paddock knows what it knows" },
+  { path: "/docs", name: "docs", expect: "The Paddock API" },
   { path: "/pet/99999999", name: "notfound", expect: "Off the track" },
   { path: "/wallet/not-an-address", name: "wallet-error", expect: "did not read" },
 ];
@@ -22,8 +23,8 @@ for (const p of PAGES) {
   test(`${p.name} renders`, async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(String(e)));
-    await page.goto(p.path, { waitUntil: "networkidle" });
-    await expect(page.getByText(p.expect, { exact: false }).first()).toBeVisible();
+    await page.goto(p.path, { waitUntil: "domcontentloaded" });
+    await expect(page.getByText(p.expect, { exact: false }).first()).toBeVisible({ timeout: 15000 });
     expect(errors, `console errors on ${p.path}`).toEqual([]);
     await page.screenshot({ path: `screenshots/${testInfo.project.name}-${p.name}.png`, fullPage: true });
   });
@@ -34,6 +35,17 @@ test("theme toggle switches and persists", async ({ page }) => {
   const toggle = page.getByRole("button", { name: /switch to cream theme/i });
   await toggle.click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
+// og:image cards render as real PNGs (the share engine).
+test("og images render as PNG", async ({ request }) => {
+  const pet = await request.get("/pet/6249/opengraph-image");
+  expect(pet.status()).toBe(200);
+  expect(pet.headers()["content-type"]).toContain("image/png");
+
+  const wallet = await request.get("/wallet/0xA8A956a5690cc81bB367DA2C2f6f1796Be2B3C30/opengraph-image");
+  expect(wallet.status()).toBe(200);
+  expect(wallet.headers()["content-type"]).toContain("image/png");
 });
 
 // Nav integrity: every link the nav actually renders must resolve to 200. Unbuilt

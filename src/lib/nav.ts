@@ -16,5 +16,5 @@ export const NAV_ROUTES: NavRoute[] = [
   { href: "/leaderboards", label: "Leaderboards", ready: true },
   { href: "/calibration", label: "Odds", ready: true },
   { href: "/methodology", label: "Methodology", ready: true },
-  { href: "/docs", label: "API", ready: false },
+  { href: "/docs", label: "API", ready: true },
 ];
