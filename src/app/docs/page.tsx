@@ -55,7 +55,7 @@ export default function DocsPage() {
           {[
             "Versioned path (/api/v1) from day one; breaking changes get a new version.",
             "Consistent error envelope { error: { code, message } } with correct HTTP status (400, 404, 429, 500), never a 200 wrapping an error.",
-            "Per-IP rate limiting returns 429 with Retry-After, so the API stays up under load.",
+            "Reads are aggressively cached at the edge and the platform auto-scales, so the API stays up under load. A per-instance limiter adds defense in depth and returns 429 with Retry-After when it trips.",
             "Cache-Control tuned to the ingest cadence; reads are aggressively cacheable.",
             "Honest data in JSON: unrevealed stats are ranges with reveal flags, valuation bands carry a comp count and a thin flag.",
           ].map((t, i) => (

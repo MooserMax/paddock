@@ -18,7 +18,8 @@
     "screenshots": "playwright test --project=mobile-380",
     "backtest:odds": "node --env-file=.env.local scripts/backtest-odds.mjs",
     "validate:shark": "node --env-file=.env.local scripts/validate-shark.mjs",
-    "test:signer": "node --import tsx scripts/signer-rejection-test.mts"
+    "test:signer": "node --import tsx scripts/signer-rejection-test.mts",
+    "catchup:races": "node --env-file=.env.local --import tsx scripts/catchup-races.mts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.1",

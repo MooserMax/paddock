@@ -34,22 +34,30 @@ export default function ScannerControls({ defaultMode = "race" }: { defaultMode?
 
   return (
     <div className="panel p-5 md:p-6">
-      <div className="mb-4 inline-flex rounded-md border hairline p-0.5" role="tablist" aria-label="Scan mode">
-        {(["race", "lobby"] as const).map((m) => (
-          <button
-            key={m}
-            role="tab"
-            aria-selected={mode === m}
-            onClick={() => { setMode(m); setError(null); }}
-            className="transition-paddock rounded px-3 py-1.5"
-            style={mode === m ? { background: "var(--paper-sunken)" } : undefined}
-          >
-            <span className={`type-micro uppercase tracking-wider ${mode === m ? "text-ink" : "text-ink-faint"}`}>
-              {m === "race" ? "A race we have" : "A live lobby"}
-            </span>
-          </button>
-        ))}
+      <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2" role="tablist" aria-label="What are you scanning">
+        {([
+          { m: "race", title: "A past race", hint: "look up a resolved race's verdict" },
+          { m: "lobby", title: "An upcoming race", hint: "grade a lobby before you enter, paste the Giglings" },
+        ] as const).map(({ m, title, hint }) => {
+          const active = mode === m;
+          return (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={active}
+              onClick={() => { setMode(m); setError(null); }}
+              className="transition-paddock rounded-md border p-3 text-left"
+              style={{ borderColor: active ? "var(--glow)" : "var(--line)", background: active ? "var(--paper-sunken)" : "transparent" }}
+            >
+              <span className={`type-data block ${active ? "text-ink" : "text-ink-soft"}`}>{title}</span>
+              <span className="type-micro mt-0.5 block normal-case text-ink-faint">{hint}</span>
+            </button>
+          );
+        })}
       </div>
+      <p className="type-micro mb-4 normal-case text-ink-faint">
+        Have a race id from a race that already ran? Use a past race. Deciding whether to enter one that has not run yet? Use an upcoming race and paste its Giglings.
+      </p>
 
       {mode === "race" ? (
         <form onSubmit={scanRace} className="space-y-3">

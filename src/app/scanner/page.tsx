@@ -73,8 +73,11 @@ export default async function ScannerPage({ searchParams }: { searchParams: SP }
             <div className="panel p-6">
               <p className="type-card-title text-ink">That did not scan</p>
               <p className="type-body mt-1 text-ink-soft">{error}</p>
+              <p className="type-body mt-2 text-ink-soft">
+                If this race has not run yet, it will not be in our database. Grade it with the upcoming-race option above by pasting the lobby&apos;s Giglings instead.
+              </p>
               <Link href="/scanner?race=5667" className="type-micro mt-4 inline-block uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>
-                Load the example instead
+                Or load the example past race
               </Link>
             </div>
           )}

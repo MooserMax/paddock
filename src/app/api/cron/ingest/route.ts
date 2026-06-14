@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCron } from "@/lib/cronAuth";
 import { syncEthPrice } from "@/lib/ingest/ethPrice";
-import { scanRaces, hydrateRaces } from "@/lib/ingest/races";
+import { scanRaces, hydrateRaces, catchUpRaces } from "@/lib/ingest/races";
 import { rollingPetSync } from "@/lib/ingest/pets";
 import { syncSales } from "@/lib/ingest/sales";
 import { materializeScores } from "@/lib/ingest/scores";
@@ -43,16 +43,22 @@ export async function GET(req: NextRequest) {
     }
   };
 
-  // Critical jobs first.
+  // Critical, fixed-cost jobs first so the materialized outputs the whole site
+  // reads always complete. races-scan is kept light: the RPC's eth_getLogs is
+  // blind to recent blocks, so it no longer drives forward progress, but it
+  // refreshes the checkpoint + the "Data as of" footer timestamp and fills any
+  // historical gaps cheaply.
   await run("eth-price", () => syncEthPrice());
-  await run("races-scan", () => scanRaces(45_000));
+  await run("races-scan", () => scanRaces(20_000));
   await run("pets", () => rollingPetSync({ maxPets: 400, staleMinutes: 30 }));
   await run("sales", () => syncSales());
   await run("scores", () => materializeScores());
   await run("calibration", () => runCalibration());
-  // Enrichment last: long-running and nothing depends on it, so it is the safe
-  // tail to lose if a duration limit ever cuts the run.
-  await run("races-hydrate", () => hydrateRaces(100));
+  // Forward race discovery via the race API (the real way we reach head), then
+  // enrichment. Both are variable-length and nothing the pages materialize from
+  // depends on them, so they are the safe tail if a duration limit ever cuts the run.
+  await run("races-catchup", () => catchUpRaces(800));
+  await run("races-hydrate", () => hydrateRaces(150));
 
   const ok = steps.every((s) => s.ok);
   // Always 200 so a single failed sub-job does not mark the whole cron as failed

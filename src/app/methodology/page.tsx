@@ -116,7 +116,16 @@ export default async function MethodologyPage() {
 
       <Section title="What cannot be known" eyebrow="The honest gap">
         <p>
-          Two things matter for racing that no public endpoint exposes. First, daily readiness: a horse has a daily race cap and becomes exhausted, but the public cooldown field reads 0 even for an exhausted horse, so Paddock cannot claim live readiness and does not. Second, point-in-time history: our data holds current ELO and current stat reveals, not their values on past dates, which is exactly why the odds backtest excludes them. Including current values to grade past races would leak the outcome. The scanner states this limit on every verdict.
+          Paddock is the source of truth for what is knowable and persistent about a horse: its revealed stats and ranges, traits and tiers, study-measured lifts, confirmed quality and upside, distance fit, and its win rate and ELO from the actual on-chain record. Three things, by contrast, no pre-race tool can see. We name them rather than pretend otherwise.
+        </p>
+        <p>
+          First, daily readiness. A horse has a daily race cap and becomes exhausted, but the public cooldown field reads 0 even for an exhausted horse, so Paddock cannot claim live readiness and does not.
+        </p>
+        <p>
+          Second, point-in-time history. Our data holds current ELO and current stat reveals, not their values on past dates, which is exactly why the odds backtest excludes them. Including current values to grade past races would leak the outcome. The scanner states this limit on every verdict.
+        </p>
+        <p>
+          Third, and most significant: items and sabotage. Players can spend consumables mid-race: butterflies that add 5 to 10 percent speed to their own horse, dung that takes 5 to 10 percent off a rival, each lasting five seconds, with faction-matched versions hitting harder. Only one item applies per play and it fires at the next resolve interval, so the effect is a series of timed nudges, not a permanent multiplier. But these are decided in real time by other players during the race, are not recorded on-chain, and leave no trace Paddock can read, before or after. Paddock does not model them. The scores describe the race that horse quality and distance fit would produce; item play is a layer of live human agency on top of that, invisible to any pre-race analysis. This is also why a horse&apos;s win rate is noisier than pure ability: its record already silently includes races where items swung the result.
         </p>
       </Section>
 
