@@ -1,10 +1,5 @@
 {
   "crons": [
-    { "path": "/api/cron/races", "schedule": "0 6 * * *" },
-    { "path": "/api/cron/pets", "schedule": "0 7 * * *" },
-    { "path": "/api/cron/sales", "schedule": "0 8 * * *" },
-    { "path": "/api/cron/scores", "schedule": "0 9 * * *" },
-    { "path": "/api/cron/calibration", "schedule": "0 10 * * *" },
-    { "path": "/api/cron/eth-price", "schedule": "0 11 * * *" }
+    { "path": "/api/cron/ingest", "schedule": "0 6 * * *" }
   ]
 }
