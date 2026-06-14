@@ -9,8 +9,8 @@
 //     A proof harness that could move assets would defeat its own purpose.
 //
 // WHAT IT REGENERATES (the evidence behind SECURITY.md, on demand):
-//   1. Fetches a FRESH free-race joinRace entry tx (re-discovered each run, not a
-//      hardcoded hash) and prints the function name, decoded args, and msg.value.
+//   1. Fetches a representative recent DIRECT free-race joinRace tx (the exact pattern
+//      the auto-racer signs, re-discovered each run) and prints function, args, msg.value.
 //   2. Asserts the on-chain tx moved zero Giglings tokens (no Transfer/approval log).
 //   3. Re-reads the verified joinRace source and asserts ownerOf is the only NFT
 //      interaction, with no transferFrom / safeTransferFrom / isApprovedForAll /
@@ -59,13 +59,17 @@ const record = (ok, label, detail = "") => {
   console.log(`  [${ok ? "PASS" : "FAIL"}] ${label}${detail ? "  ::  " + detail : ""}`);
 };
 
-// --- Step 1+2: discover a fresh free-race joinRace tx and inspect it ----------
+// --- Step 1+2: find a real DIRECT free-race joinRace tx and inspect it ---------
+// This decodes the exact pattern the auto-racer signs: a direct joinRace call to
+// the racing contract with value 0. We scan back from head for the most recent
+// such tx. Two honest caveats: (1) the public RPC's eth_getLogs lags ~2.6 days
+// behind head, so the most recent direct joinRace it returns is recent, not live;
+// (2) live in-game entries now route through a wrapper contract that internally
+// reaches the same joinRace (verified to also move no assets and send no value),
+// while the auto-racer signs the direct call shown here. The safety conclusion is
+// the racing contract's verified source (step 3), which is current regardless.
 async function findFreeJoinRace() {
   const head = await client.getBlockNumber();
-  // Scan backward from head in windows until we find the most recent tx that is a
-  // joinRace with msg.value == 0 (a free-race entry). Racing logs can be sparse and
-  // the newest may sit well behind head, so the scan reaches back generously rather
-  // than assuming recent activity. The tx is re-discovered every run, never hardcoded.
   const WINDOW = 100000n;
   const MAX_LOOKBACK = 2000000n;
   for (let back = 0n; back < MAX_LOOKBACK; back += WINDOW) {
@@ -89,7 +93,7 @@ console.log(`RPC: ${RPC}`);
 console.log(`PetRacingSystem: ${RACING}`);
 console.log(`Giglings (GigaPetNFT): ${GIGLINGS}\n`);
 
-console.log("1. Fresh free-race joinRace entry");
+console.log("1. Representative recent direct free-race joinRace entry");
 const tx = await findFreeJoinRace();
 if (!tx) {
   record(false, "found a recent free-race joinRace tx", "none discovered in lookback window");

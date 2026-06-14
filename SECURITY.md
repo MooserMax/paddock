@@ -91,7 +91,7 @@ ONLY read (decode txs, read verified source, query approvals); they never sign, 
 or load a private key. Each prints a single PASS or FAIL.
 
 ```
-# 1. Decode a FRESH free-race joinRace entry (re-discovered each run, not hardcoded),
+# 1. Decode a representative recent DIRECT free-race joinRace entry (re-discovered each run),
 #    confirm 0 ETH and zero token movement, and re-read the verified joinRace source
 #    to assert ownerOf is the only NFT interaction.
 node scripts/contract-forensics.mjs
@@ -113,6 +113,6 @@ A nonzero exit code means a check failed: something changed, re-verify before tr
 the auto-racer.
 
 ## Re-verification triggers
-Re-run the full analysis (decode a fresh free-race entry tx + re-read joinRace source)
+Re-run the full analysis (decode a representative recent free-race entry tx + re-read joinRace source)
 if any of these change: the PetRacingSystem address, its verified source hash, or the
 GigaPetNFT address. Stale safety analysis is not safety.
