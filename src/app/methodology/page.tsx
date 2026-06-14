@@ -2,7 +2,6 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { api } from "@/lib/api/client";
 import type { CalibrationResult } from "@/lib/api/types";
-import Panel from "@/components/ui/Panel";
 
 export const metadata: Metadata = {
   title: "Methodology",

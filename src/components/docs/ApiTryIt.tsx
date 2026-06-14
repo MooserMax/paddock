@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 // A live, runnable API example: the copy-paste curl and a "Run it" button that
 // hits the real endpoint and renders the JSON in place. The site's own API,
@@ -18,7 +18,7 @@ export default function ApiTryIt({ path, hero = false }: { path: string; hero?: 
   // the pre-hydration fallback honors the configured site URL.
   const curl = `curl ${origin || process.env.NEXT_PUBLIC_SITE_URL || "https://paddock.bot"}/api/v1${path}`;
 
-  async function run() {
+  const run = useCallback(async () => {
     setLoading(true);
     setBody(null);
     setStatus(null);
@@ -32,7 +32,7 @@ export default function ApiTryIt({ path, hero = false }: { path: string; hero?: 
     } finally {
       setLoading(false);
     }
-  }
+  }, [path]);
 
   async function copy() {
     try {
@@ -45,7 +45,7 @@ export default function ApiTryIt({ path, hero = false }: { path: string; hero?: 
   }
 
   // The hero example runs itself on mount so the page lands on live JSON.
-  useEffect(() => { if (hero) run(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hero]);
+  useEffect(() => { if (hero) run(); }, [hero, run]);
 
   return (
     <div className="overflow-hidden rounded-lg border hairline">
