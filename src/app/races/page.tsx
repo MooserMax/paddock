@@ -28,7 +28,7 @@ export default async function RacesPage({ searchParams }: { searchParams: { trac
       <header className="mb-6">
         <p className="eyebrow">Live from our database</p>
         <h1 className="type-page-title mt-2 text-ink">Recent races</h1>
-        <p className="type-body mt-2 text-ink-soft">Every resolved race, gap-free from on-chain events. Tap one for the scanner verdict.</p>
+        <p className="type-body mt-2 text-ink-soft">Every race that ran, newest first. The Finished column is when the race resolved in-game, not when we synced. Races only resolve once they fill, so gaps between finishes are normal. Tap one for the scanner verdict.</p>
       </header>
 
       {/* Track filter */}
@@ -53,7 +53,7 @@ export default async function RacesPage({ searchParams }: { searchParams: { trac
             <span className="type-micro uppercase text-ink-faint">Track</span>
             <span className="type-micro uppercase text-ink-faint">Winner</span>
             <span className="type-micro uppercase text-ink-faint">Payout</span>
-            <span className="type-micro text-right uppercase text-ink-faint">When</span>
+            <span className="type-micro text-right uppercase text-ink-faint">Finished</span>
           </div>
           {feed.races.map((r) => (
             <Link

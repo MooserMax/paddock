@@ -20,8 +20,11 @@ const SHARK_TABLE = [
 
 export default async function MethodologyPage() {
   let cal: CalibrationResult | null = null;
+  let resolvedNow: number | null = null;
   try {
-    cal = await api.calibration();
+    const [c, stats] = await Promise.all([api.calibration(), api.stats()]);
+    cal = c;
+    resolvedNow = stats.racesResolved;
   } catch {
     // the integrity section degrades gracefully without the live numbers
   }
@@ -44,7 +47,7 @@ export default async function MethodologyPage() {
 
       <Section title="The study behind the scores" eyebrow="A full-population read">
         <p>
-          The scoring weights come from a study of every resolved race at the time: 4,537 races, 30,288 entries. The weights are frozen from that snapshot, so the constants stay fixed even as live data grows (now past 5,671 resolved races); 4,537 is the studied population, not a stale count. The strongest single signal is raw stat quality: race winners average 3.8% above the field on all four stats. Among traits, Surger is the alpha: a 23.19% win rate when active versus the study&apos;s 14.18% baseline, a 1.63x lift overall. Several traits change sign by distance, which is why track fit is computed per length rather than globally: Surger is 1.63x across all tracks but 1.69x at 1200m, and Closer&apos;s edge appears only at 2400m and longer.
+          The scoring weights come from a study of every resolved race at the time: 4,537 races, 30,288 entries. The weights are frozen from that snapshot, so the constants stay fixed even as live data grows ({resolvedNow ? `now past ${resolvedNow.toLocaleString("en-US")} resolved races` : "the live count keeps climbing"}); 4,537 is the studied population, not a stale count. The strongest single signal is raw stat quality: race winners average 3.8% above the field on all four stats. Among traits, Surger is the alpha: a 23.19% win rate when active versus the study&apos;s 14.18% baseline, a 1.63x lift overall. Several traits change sign by distance, which is why track fit is computed per length rather than globally: Surger is 1.63x across all tracks but 1.69x at 1200m, and Closer&apos;s edge appears only at 2400m and longer.
         </p>
       </Section>
 

@@ -32,7 +32,7 @@ export default async function Footer() {
           </p>
           {(petsSyncedAt || racesScannedAt) && (
             <p className="type-micro text-ink-faint">
-              Data as of {timeAgo(racesScannedAt ?? petsSyncedAt)}
+              Synced {timeAgo(racesScannedAt ?? petsSyncedAt)}
               {petsSyncedAt && racesScannedAt ? ` · pets ${timeAgo(petsSyncedAt)}` : ""}
             </p>
           )}

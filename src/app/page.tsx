@@ -47,6 +47,11 @@ export default async function Home() {
               {stats.recentBigSale && <LiveStat value={formatEth(stats.recentBigSale.priceEth, 3)} label="top recent sale" />}
             </div>
           )}
+          {stats && stats.racesAbandoned > 0 && (
+            <p className="assemble type-micro mt-3 normal-case text-ink-faint" style={{ animationDelay: "200ms" }}>
+              That is races that actually ran. A further {formatInt(stats.racesAbandoned)} were created but never drew enough entrants to start, so we count them separately rather than inflate the total.
+            </p>
+          )}
         </div>
       </section>
 

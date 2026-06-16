@@ -26,7 +26,9 @@ export default function ScannerControls({ defaultMode = "race" }: { defaultMode?
   function scanLobby(e: React.FormEvent) {
     e.preventDefault();
     const ids = pets.split(/[\s,]+/).map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0);
-    if (ids.length < 2) return setError("Paste at least two Gigling ids, separated by spaces or commas.");
+    // One id gives a single-horse read; two or more grades the field. Zero is the
+    // only error here.
+    if (ids.length < 1) return setError("Paste at least one Gigling id, separated by spaces or commas.");
     const m = mark.trim() ? Number(mark.trim()) : null;
     if (m && !ids.includes(m)) return setError("Your horse must be one of the pasted ids.");
     router.push(`/scanner?pets=${ids.join(",")}&track=${track}${m ? `&mark=${m}` : ""}`);

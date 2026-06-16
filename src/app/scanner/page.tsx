@@ -1,9 +1,10 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { api, ApiClientError } from "@/lib/api/client";
-import type { RaceDetail } from "@/lib/api/types";
+import type { RaceDetail, PetDossier } from "@/lib/api/types";
 import ScannerControls from "@/components/scanner/ScannerControls";
 import ScannerVerdict from "@/components/scanner/ScannerVerdict";
+import SingleHorseRead from "@/components/scanner/SingleHorseRead";
 
 export const metadata: Metadata = {
   title: "Scanner",
@@ -21,7 +22,9 @@ interface SP {
 
 export default async function ScannerPage({ searchParams }: { searchParams: SP }) {
   const mark = searchParams.mark ? Number(searchParams.mark) : undefined;
+  const track = Number(searchParams.track ?? 1200);
   let result: RaceDetail | null = null;
+  let single: PetDossier | null = null;
   let error: string | null = null;
   let scanned = false;
 
@@ -35,11 +38,21 @@ export default async function ScannerPage({ searchParams }: { searchParams: SP }
   } else if (searchParams.pets) {
     scanned = true;
     const ids = searchParams.pets.split(",").map((s) => Number(s)).filter((n) => Number.isInteger(n) && n > 0);
-    const track = Number(searchParams.track ?? 1200);
-    try {
-      result = await api.scan(ids, track, mark);
-    } catch (err) {
-      error = err instanceof ApiClientError ? err.message : "Could not scan that lobby.";
+    if (ids.length === 1) {
+      // One horse: a single-horse read rather than a dead-end.
+      try {
+        single = await api.pet(ids[0]);
+      } catch (err) {
+        error = err instanceof ApiClientError ? err.message : "Could not read that Gigling.";
+      }
+    } else if (ids.length >= 2) {
+      try {
+        result = await api.scan(ids, track, mark);
+      } catch (err) {
+        error = err instanceof ApiClientError ? err.message : "Could not scan that lobby.";
+      }
+    } else {
+      error = "Add at least one Gigling id. The scanner grades a field, so paste the lobby as it fills.";
     }
   }
 
@@ -83,6 +96,7 @@ export default async function ScannerPage({ searchParams }: { searchParams: SP }
           )}
 
           {result && <ScannerVerdict race={result} markedPetId={mark} />}
+          {single && <SingleHorseRead pet={single} track={track} />}
         </div>
       </div>
     </div>
