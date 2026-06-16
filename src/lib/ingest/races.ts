@@ -213,7 +213,7 @@ export interface CatchUpResult {
 
 const MISSING_STREAK_LIMIT = 6;
 
-export async function catchUpRaces(maxRaces: number, deadline?: number): Promise<CatchUpResult> {
+export async function catchUpRaces(maxRaces: number, deadline?: number, gapMs: number = REQUEST_GAP_MS): Promise<CatchUpResult> {
   const { data: maxRow } = await db()
     .from("races")
     .select("race_id")
@@ -238,13 +238,17 @@ export async function catchUpRaces(maxRaces: number, deadline?: number): Promise
     } catch {
       race = null;
     }
-    await sleep(REQUEST_GAP_MS);
+    await sleep(gapMs);
     scanned += 1;
 
-    // A nonexistent race comes back without a phase or pets. Real races (open or
-    // resolved) carry a field and a pet list.
-    const exists =
-      !!race && race.success && race.phase != null && Array.isArray(race.racePets) && race.racePets.length > 0;
+    // A real (created) race id returns success with a phase, even when it has not
+    // drawn entrants yet or expired empty (phase 4, racePets 0). Only a hard
+    // success=false means the id does not exist. Requiring racePets here used to
+    // skip real-but-empty races AND inflate the missing streak, which could halt
+    // catch-up before the true frontier; treat any real race as existing so we
+    // always reach head (empty ones go in as open rows for hydrateRaces to
+    // classify terminal).
+    const exists = !!race && race.success && race.phase != null;
     if (!exists || !race) {
       missing += 1;
       id += 1;

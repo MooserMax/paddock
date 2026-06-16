@@ -11,7 +11,7 @@ export interface AccountSyncResult {
 // The bounded set of addresses the site actually displays: owners of leaderboard-
 // ranked horses (CQ / ELO / most-winning) plus owners active in recent races. We
 // resolve usernames only for these, not the whole 28k-pet population.
-async function displayedOwnerAddresses(): Promise<string[]> {
+async function displayedOwnerAddresses(includeEarnings: boolean): Promise<string[]> {
   const set = new Set<string>();
   const add = (a: unknown) => {
     if (typeof a === "string" && a) set.add(a.toLowerCase());
@@ -54,6 +54,19 @@ async function displayedOwnerAddresses(): Promise<string[]> {
     .limit(300);
   for (const r of recent ?? []) add(r.owner_address);
 
+  // Earnings board: top single-payout owners. This sort over race_entries is
+  // heavier, so it is only run in the unbounded backfill (GitHub Action), not on
+  // the per-cycle cron, where inactive top-earners would otherwise stay unresolved.
+  if (includeEarnings) {
+    const { data: earners } = await db()
+      .from("race_entries")
+      .select("owner_address")
+      .not("payout_wei", "is", null)
+      .order("payout_wei", { ascending: false })
+      .limit(120);
+    for (const r of earners ?? []) add(r.owner_address);
+  }
+
   return [...set];
 }
 
@@ -66,9 +79,10 @@ export async function syncAccounts(opts: {
   maxLookups: number;
   refreshDays: number;
   deadline?: number;
+  includeEarnings?: boolean;
 }): Promise<AccountSyncResult> {
-  const { maxLookups, refreshDays, deadline } = opts;
-  const candidates = await displayedOwnerAddresses();
+  const { maxLookups, refreshDays, deadline, includeEarnings = false } = opts;
+  const candidates = await displayedOwnerAddresses(includeEarnings);
   if (candidates.length === 0) return { candidates: 0, looked: 0, named: 0, remaining: 0 };
 
   // Which candidates are due: unknown, or last checked older than the window.

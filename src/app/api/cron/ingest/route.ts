@@ -21,14 +21,15 @@ export const maxDuration = 60; // Hobby hard cap. Every path below aims for ~40s
 // external scheduler's request timeout, e.g. cron-job.org), and any call stays
 // far under Vercel's 60s function cap. A large delta (post-downtime) is chunked
 // across calls via moreRemain rather than run long.
-const MAX_RACES_PER_CALL = 20; // forward catch-up cap per call
+const MAX_RACES_PER_CALL = 45; // forward catch-up cap: must out-pace race creation
+const CATCHUP_GAP_MS = 300; // race-API polling gap during catch-up (vs 500 default)
 const MAX_HYDRATE_PER_CALL = 12; // open -> resolved enrichment cap per call
 const PET_BUDGET = 120; // just-raced pets refreshed (then re-scored) per call
 const ACCOUNT_LOOKUPS_PER_CALL = 6; // displayed-owner username lookups per call
 const ACCOUNT_REFRESH_DAYS = 14; // re-check a resolved address this infrequently
-const RACE_DEADLINE_MS = 14_000; // wall-clock budget for the race-API polling
-const SOFT_DEADLINE_MS = 22_000; // stop starting new pet/score work past this
-const ACCOUNT_DEADLINE_MS = 28_000; // accounts run in whatever budget remains
+const RACE_DEADLINE_MS = 26_000; // wall-clock budget for the race-API polling
+const SOFT_DEADLINE_MS = 34_000; // stop starting new pet/score work past this
+const ACCOUNT_DEADLINE_MS = 40_000; // accounts run in whatever budget remains
 const LOCK_KEY = "ingest_lock";
 const LOCK_TTL_MS = 90_000; // a crashed run self-releases after this
 
@@ -81,7 +82,7 @@ export async function GET(req: NextRequest) {
     }
 
     // 1. Forward race discovery from our cursor up to the frontier (bounded).
-    const catchup = await catchUpRaces(MAX_RACES_PER_CALL, raceDeadline);
+    const catchup = await catchUpRaces(MAX_RACES_PER_CALL, raceDeadline, CATCHUP_GAP_MS);
     steps.catchup = catchup;
 
     // 2. Resolve any open races that have since finished (bounded, shares the

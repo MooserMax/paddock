@@ -33,6 +33,7 @@ await run("pets", () => rollingPetSync({ maxPets: 800 }));
 await run("sales", () => syncSales());
 await run("scores", () => materializeScores());
 await run("calibration", () => runCalibration());
-// No duration cap here, so backfill every displayed owner's username in one pass.
-await run("accounts", () => syncAccounts({ maxLookups: 3000, refreshDays: 14 }));
+// No duration cap here, so backfill every displayed owner (all four boards,
+// including top earners) in one pass.
+await run("accounts", () => syncAccounts({ maxLookups: 3000, refreshDays: 14, includeEarnings: true }));
 console.log("ingest-all complete");

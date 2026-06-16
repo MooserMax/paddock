@@ -11,7 +11,9 @@ export const metadata: Metadata = {
   description: "The best Giglings by confirmed quality, ELO, win rate (shrunk, with raw shown), and earnings. Every column explained.",
 };
 
-export const revalidate = 120;
+// Short window so the board reflects current rankings AND freshly-resolved owner
+// usernames within ~30s (the data layer is always fresh; this is the render cache).
+export const revalidate = 30;
 
 const METRICS: { key: LeaderboardMetric; label: string; unit: string }[] = [
   { key: "cq", label: "Confirmed quality", unit: "" },
@@ -31,7 +33,7 @@ export default async function LeaderboardsPage({ searchParams }: { searchParams:
   const metric = (METRICS.find((m) => m.key === searchParams.metric)?.key ?? "cq") as LeaderboardMetric;
   let board: LeaderboardResponse | null = null;
   try {
-    board = await api.leaderboard(metric, 50, 0, { revalidate: 120 });
+    board = await api.leaderboard(metric, 50, 0, { revalidate: 30 });
   } catch {
     // empty state below
   }
