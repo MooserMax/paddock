@@ -213,6 +213,91 @@ export interface CatchUpResult {
 
 const MISSING_STREAK_LIMIT = 6;
 
+// Upsert one race (plus its entries if resolved) from a fetched API payload.
+// Shared by forward catch-up and gap backfill. Returns whether it was resolved.
+async function upsertRaceFromApi(id: number, race: Awaited<ReturnType<typeof fetchRace>>): Promise<boolean> {
+  const isResolved = Array.isArray(race.finalRanking) && race.finalRanking.length > 0;
+  const maxFinishMs = isResolved && race.finishTimes.length > 0 ? Math.max(...race.finishTimes) : 0;
+  // A non-resolved race already at the terminal phase never ran (expired empty):
+  // mark it hydrated so it is the "abandoned" state, not retried or left pending.
+  const isTerminal = !isResolved && typeof race.phase === "number" && race.phase >= TERMINAL_PHASE;
+
+  const { error: rErr } = await db().from("races").upsert(
+    {
+      race_id: id,
+      field_size: race.fieldSize ?? null,
+      track_length: race.trackLength ?? null,
+      race_temp: race.raceTemp ?? null,
+      entry_fee_wei: race.entryFee ?? null,
+      creator: race.creator?.toLowerCase() ?? null,
+      payout_bps: race.payoutBps ?? null,
+      fee_bps: {
+        creator: race.creatorFeeBps,
+        protocol: race.protocolFeeBps,
+        protocolJuiced: race.protocolFeeBpsJuiced,
+        jackpot: race.jackpotBps,
+      },
+      race_start: race.raceStart ? new Date(race.raceStart * 1000).toISOString() : null,
+      resolved: isResolved,
+      resolved_at: isResolved ? new Date((race.raceStart + maxFinishMs / 1000) * 1000).toISOString() : null,
+      hydrated: isResolved || isTerminal,
+    },
+    { onConflict: "race_id" }
+  );
+  if (rErr) throw new Error(`race upsert failed: ${rErr.message}`);
+
+  if (isResolved) {
+    const entryRows = race.finalRanking.map((petId, i) => ({
+      race_id: id,
+      pet_id: petId,
+      owner_address: race.petOwners[String(petId)]?.toLowerCase() ?? null,
+      finish_position: i + 1,
+      finish_time_ms: race.finishTimes[i] ?? null,
+      payout_wei: race.petPayouts[String(petId)]?.amount ?? null,
+    }));
+    if (entryRows.length > 0) {
+      const { error: eErr } = await db().from("race_entries").upsert(entryRows, { onConflict: "race_id,pet_id" });
+      if (eErr) throw new Error(`race_entries upsert failed: ${eErr.message}`);
+    }
+  }
+  return isResolved;
+}
+
+export interface BackfillResult {
+  scanned: number;
+  inserted: number;
+  resolved: number;
+  missing: number;
+}
+
+// Fetch and upsert a specific set of race ids: the historical gaps the forward
+// catch-up skipped (abandoned-empty races, and races that were empty when first
+// passed and have since resolved). Idempotent; existing rows are re-upserted.
+export async function ingestRacesByIds(ids: number[], gapMs: number = REQUEST_GAP_MS): Promise<BackfillResult> {
+  let scanned = 0;
+  let inserted = 0;
+  let resolved = 0;
+  let missing = 0;
+  for (const id of ids) {
+    let race: Awaited<ReturnType<typeof fetchRace>> | null = null;
+    try {
+      race = await fetchRace(id);
+    } catch {
+      race = null;
+    }
+    await sleep(gapMs);
+    scanned += 1;
+    const exists = !!race && race.success && race.phase != null;
+    if (!exists || !race) {
+      missing += 1;
+      continue;
+    }
+    if (await upsertRaceFromApi(id, race)) resolved += 1;
+    inserted += 1;
+  }
+  return { scanned, inserted, resolved, missing };
+}
+
 export async function catchUpRaces(maxRaces: number, deadline?: number, gapMs: number = REQUEST_GAP_MS): Promise<CatchUpResult> {
   const { data: maxRow } = await db()
     .from("races")
@@ -256,49 +341,8 @@ export async function catchUpRaces(maxRaces: number, deadline?: number, gapMs: n
     }
     missing = 0;
 
-    const isResolved = Array.isArray(race.finalRanking) && race.finalRanking.length > 0;
-    const maxFinishMs = isResolved && race.finishTimes.length > 0 ? Math.max(...race.finishTimes) : 0;
-
-    const { error: rErr } = await db().from("races").upsert(
-      {
-        race_id: id,
-        field_size: race.fieldSize ?? null,
-        track_length: race.trackLength ?? null,
-        race_temp: race.raceTemp ?? null,
-        entry_fee_wei: race.entryFee ?? null,
-        creator: race.creator?.toLowerCase() ?? null,
-        payout_bps: race.payoutBps ?? null,
-        fee_bps: {
-          creator: race.creatorFeeBps,
-          protocol: race.protocolFeeBps,
-          protocolJuiced: race.protocolFeeBpsJuiced,
-          jackpot: race.jackpotBps,
-        },
-        race_start: race.raceStart ? new Date(race.raceStart * 1000).toISOString() : null,
-        resolved: isResolved,
-        resolved_at: isResolved ? new Date((race.raceStart + maxFinishMs / 1000) * 1000).toISOString() : null,
-        hydrated: isResolved,
-      },
-      { onConflict: "race_id" }
-    );
-    if (rErr) throw new Error(`catchup race upsert failed: ${rErr.message}`);
+    if (await upsertRaceFromApi(id, race)) resolved += 1;
     inserted += 1;
-
-    if (isResolved) {
-      const entryRows = race.finalRanking.map((petId, i) => ({
-        race_id: id,
-        pet_id: petId,
-        owner_address: race.petOwners[String(petId)]?.toLowerCase() ?? null,
-        finish_position: i + 1,
-        finish_time_ms: race.finishTimes[i] ?? null,
-        payout_wei: race.petPayouts[String(petId)]?.amount ?? null,
-      }));
-      if (entryRows.length > 0) {
-        const { error: eErr } = await db().from("race_entries").upsert(entryRows, { onConflict: "race_id,pet_id" });
-        if (eErr) throw new Error(`catchup entries upsert failed: ${eErr.message}`);
-      }
-      resolved += 1;
-    }
     id += 1;
   }
 
