@@ -123,6 +123,15 @@ create table if not exists pet_scores (
 create index if not exists pet_scores_confirmed_idx on pet_scores (confirmed_quality desc nulls last);
 create index if not exists pet_scores_upside_idx on pet_scores (upside desc nulls last);
 
+-- Resolved Gigaverse account handles (address -> primaryUsername). Populated by
+-- the ingest layer for the bounded set of addresses the site displays; reads
+-- fall back to the truncated address when an address is absent.
+create table if not exists accounts (
+  address text primary key,
+  username text,
+  last_checked_at timestamptz
+);
+
 alter table pets enable row level security;
 alter table pet_traits enable row level security;
 alter table races enable row level security;
@@ -131,3 +140,4 @@ alter table sales enable row level security;
 alter table eth_price enable row level security;
 alter table sync_state enable row level security;
 alter table pet_scores enable row level security;
+alter table accounts enable row level security;

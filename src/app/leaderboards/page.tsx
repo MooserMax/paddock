@@ -3,7 +3,8 @@ import type { Metadata } from "next";
 import { api } from "@/lib/api/client";
 import type { LeaderboardMetric, LeaderboardResponse } from "@/lib/api/types";
 import RarityBadge from "@/components/RarityBadge";
-import { formatEth, formatPct, formatScore, shortAddress } from "@/lib/format";
+import OwnerLabel from "@/components/OwnerLabel";
+import { formatEth, formatPct, formatScore } from "@/lib/format";
 
 export const metadata: Metadata = {
   title: "Leaderboards",
@@ -90,13 +91,11 @@ export default async function LeaderboardsPage({ searchParams }: { searchParams:
                 {valueFor(metric, r.value)}
               </span>
               {r.ownerAddress ? (
-                <Link
-                  href={`/wallet/${r.ownerAddress}`}
-                  className="type-data hidden truncate tabular-nums text-ink-faint transition-paddock hover:text-glow md:block"
-                  title={r.ownerAddress}
-                >
-                  {shortAddress(r.ownerAddress)}
-                </Link>
+                <OwnerLabel
+                  address={r.ownerAddress}
+                  name={r.ownerName}
+                  className="type-data hidden truncate text-ink-faint transition-paddock hover:text-glow md:block"
+                />
               ) : (
                 <span className="type-data hidden tabular-nums text-ink-faint md:block">-</span>
               )}

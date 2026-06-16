@@ -11,6 +11,7 @@ import { rollingPetSync } from "../src/lib/ingest/pets";
 import { syncSales } from "../src/lib/ingest/sales";
 import { materializeScores } from "../src/lib/ingest/scores";
 import { runCalibration } from "../src/lib/ingest/calibration";
+import { syncAccounts } from "../src/lib/ingest/accounts";
 
 async function run(name: string, fn: () => Promise<unknown>) {
   const t = Date.now();
@@ -32,4 +33,6 @@ await run("pets", () => rollingPetSync({ maxPets: 800 }));
 await run("sales", () => syncSales());
 await run("scores", () => materializeScores());
 await run("calibration", () => runCalibration());
+// No duration cap here, so backfill every displayed owner's username in one pass.
+await run("accounts", () => syncAccounts({ maxLookups: 3000, refreshDays: 14 }));
 console.log("ingest-all complete");

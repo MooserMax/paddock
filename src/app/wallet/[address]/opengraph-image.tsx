@@ -1,6 +1,7 @@
 import { ImageResponse } from "next/og";
 import { getWalletSummary } from "@/lib/api/queries";
-import { shortAddress } from "@/lib/format";
+import { lookupUsername } from "@/lib/accounts";
+import { shortAddress, ownerDisplay } from "@/lib/format";
 import { OG_SIZE, OG_COLORS, ogBackground, ogFonts, ogRarityColor } from "@/lib/og";
 
 export const runtime = "nodejs";
@@ -11,7 +12,17 @@ export const alt = "Paddock stable report";
 export default async function Image({ params }: { params: { address: string } }) {
   const fonts = await ogFonts();
   const address = decodeURIComponent(params.address);
-  const s = await getWalletSummary(address).catch(() => null);
+  const [s, username] = await Promise.all([
+    getWalletSummary(address).catch(() => null),
+    lookupUsername(address).catch(() => null),
+  ]);
+
+  // Username headline when known, truncated address otherwise. When a username is
+  // shown, the address stays visible (small) in the subtitle so the canonical
+  // wallet is never hidden on the share card.
+  const headline = ownerDisplay(username, address);
+  const stats = s ? `${s.petCount} Giglings · ${s.hatchedCount} hatched` : "stable";
+  const subtitle = username ? `${shortAddress(address)} · ${stats}` : stats;
 
   const value =
     s && s.stableValue.lowEth !== null
@@ -32,9 +43,9 @@ export default async function Image({ params }: { params: { address: string } })
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", marginTop: 30 }}>
-          <span style={{ fontSize: 84, lineHeight: 1 }}>{shortAddress(address)}</span>
+          <span style={{ fontSize: 84, lineHeight: 1 }}>{headline}</span>
           <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkSoft, marginTop: 8 }}>
-            {s ? `${s.petCount} Giglings · ${s.hatchedCount} hatched` : "stable"}
+            {subtitle}
           </span>
         </div>
 

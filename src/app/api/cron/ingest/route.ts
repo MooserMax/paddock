@@ -4,6 +4,7 @@ import { syncEthPrice } from "@/lib/ingest/ethPrice";
 import { catchUpRaces, hydrateRaces } from "@/lib/ingest/races";
 import { rollingPetSync } from "@/lib/ingest/pets";
 import { materializeScoresFor } from "@/lib/ingest/scores";
+import { syncAccounts } from "@/lib/ingest/accounts";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -23,8 +24,11 @@ export const maxDuration = 60; // Hobby hard cap. Every path below aims for ~40s
 const MAX_RACES_PER_CALL = 20; // forward catch-up cap per call
 const MAX_HYDRATE_PER_CALL = 12; // open -> resolved enrichment cap per call
 const PET_BUDGET = 120; // just-raced pets refreshed (then re-scored) per call
-const RACE_DEADLINE_MS = 16_000; // wall-clock budget for the race-API polling
-const SOFT_DEADLINE_MS = 24_000; // stop starting new work past this
+const ACCOUNT_LOOKUPS_PER_CALL = 6; // displayed-owner username lookups per call
+const ACCOUNT_REFRESH_DAYS = 14; // re-check a resolved address this infrequently
+const RACE_DEADLINE_MS = 14_000; // wall-clock budget for the race-API polling
+const SOFT_DEADLINE_MS = 22_000; // stop starting new pet/score work past this
+const ACCOUNT_DEADLINE_MS = 28_000; // accounts run in whatever budget remains
 const LOCK_KEY = "ingest_lock";
 const LOCK_TTL_MS = 90_000; // a crashed run self-releases after this
 
@@ -109,6 +113,26 @@ export async function GET(req: NextRequest) {
       steps.scoresSkipped = "soft deadline";
     }
 
+    // 4. Resolve Gigaverse usernames for a small slice of displayed owners, in
+    //    whatever budget remains. Capped + deadline-gated; the rest spills to the
+    //    next cycle (full backfill is the GitHub Action's job).
+    let accounts = { candidates: 0, looked: 0, named: 0, remaining: 0 };
+    const accountDeadline = t0 + ACCOUNT_DEADLINE_MS;
+    if (Date.now() < accountDeadline) {
+      try {
+        accounts = await syncAccounts({
+          maxLookups: ACCOUNT_LOOKUPS_PER_CALL,
+          refreshDays: ACCOUNT_REFRESH_DAYS,
+          deadline: accountDeadline,
+        });
+        steps.accounts = accounts;
+      } catch (e) {
+        steps.accountsError = msg(e);
+      }
+    } else {
+      steps.accountsSkipped = "deadline";
+    }
+
     // Advance the "Synced" indicator the site footer reads.
     const racesScannedAt = await touchRacesScannedAt();
 
@@ -128,6 +152,9 @@ export async function GET(req: NextRequest) {
       pendingHydration: hydrate.remaining,
       petsSynced: pets.synced,
       scored: scored.scored,
+      usernamesLooked: accounts.looked,
+      usernamesResolved: accounts.named,
+      usernamesRemaining: accounts.remaining,
       racesScannedAt,
       tookMs: Date.now() - t0,
       steps,

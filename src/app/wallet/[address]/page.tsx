@@ -6,7 +6,8 @@ import PetCard from "@/components/PetCard";
 import Panel from "@/components/ui/Panel";
 import WalletSearch from "@/components/WalletSearch";
 import { TRACK_LABEL } from "@/lib/display";
-import { formatEth, formatInt, formatScore, shortAddress } from "@/lib/format";
+import { formatEth, formatInt, formatScore, shortAddress, ownerDisplay } from "@/lib/format";
+import { resolveOwnerName } from "@/lib/accounts";
 
 export const revalidate = 60;
 
@@ -16,9 +17,10 @@ interface PageProps {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const addr = decodeURIComponent(params.address);
+  const label = await resolveOwnerName(addr); // username when known, else truncated
   return {
-    title: `Stable ${shortAddress(addr)}`,
-    description: `Paddock stable intelligence report for ${shortAddress(addr)}: A-team, hidden gems, reveal queue, and estimated value.`,
+    title: `Stable ${label}`,
+    description: `Paddock stable intelligence report for ${label}: A-team, hidden gems, reveal queue, and estimated value.`,
     openGraph: { images: [`/wallet/${addr}/opengraph-image`] },
   };
 }
@@ -57,11 +59,13 @@ export default async function WalletPage({ params }: PageProps) {
       <header className="assemble flex flex-col gap-2">
         <p className="eyebrow">Stable intelligence report</p>
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-          <h1 className="type-page-title text-ink">{shortAddress(summary.address)}</h1>
+          <h1 className="type-page-title text-ink">{ownerDisplay(summary.name, summary.address)}</h1>
           <span className="type-data text-ink-faint">
             {formatInt(summary.petCount)} Giglings · {formatInt(summary.hatchedCount)} hatched
           </span>
         </div>
+        {/* The URL is the address, so always keep the full wallet visible to copy. */}
+        <p className="type-micro tabular-nums text-ink-faint" title={summary.address}>{summary.address}</p>
       </header>
 
       {empty ? (

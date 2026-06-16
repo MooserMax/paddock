@@ -10,8 +10,9 @@ import RarityBadge from "@/components/RarityBadge";
 import Panel from "@/components/ui/Panel";
 import TraitRow from "@/components/dossier/TraitRow";
 import TrackFitBars from "@/components/dossier/TrackFitBars";
+import OwnerLabel from "@/components/OwnerLabel";
 import { STAT_LABEL, TRACK_LABEL } from "@/lib/display";
-import { formatEth, formatPct, formatScore, ordinal, shortAddress } from "@/lib/format";
+import { formatEth, formatPct, formatScore, ordinal } from "@/lib/format";
 
 export const revalidate = 120;
 
@@ -75,9 +76,10 @@ export default async function PetPage({ params }: { params: { id: string } }) {
               <span className="type-data text-ink-soft">{d.faction.name}</span>
               <span className="type-micro uppercase text-ink-faint">Gigling #{d.id}</span>
               {d.ownerAddress && (
-                <Link href={`/wallet/${d.ownerAddress}`} className="type-micro uppercase text-ink-faint transition-paddock hover:text-glow">
-                  owner {shortAddress(d.ownerAddress)}
-                </Link>
+                <span className="type-micro uppercase text-ink-faint">
+                  owner{" "}
+                  <OwnerLabel address={d.ownerAddress} name={d.ownerName} className="transition-paddock hover:text-glow" />
+                </span>
               )}
             </div>
           </div>

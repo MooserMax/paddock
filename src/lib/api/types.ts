@@ -71,6 +71,7 @@ export interface PetDossier {
   id: number;
   name: string | null;
   ownerAddress: string | null;
+  ownerName: string | null; // resolved Gigaverse username of the owner, null if none
   imgUrl: string | null;
   hatched: boolean;
   rarity: RarityRef;
@@ -212,7 +213,8 @@ export interface LeaderboardRow {
   petId: number;
   name: string | null;
   imgUrl: string | null;
-  ownerAddress: string | null; // links to the owner's stable; handle TBD
+  ownerAddress: string | null; // links to the owner's stable
+  ownerName: string | null; // resolved Gigaverse username, null if none
   rarity: RarityRef;
   value: number; // the metric's primary value
   confirmedQuality: number;

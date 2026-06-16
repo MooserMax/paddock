@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { lookupUsername, lookupUsernames } from "../accounts";
 import { FRESH_RANGE_WIDTH } from "../scoring/constants";
 import { computeOdds } from "../scoring/odds";
 import { computeVerdict, SHARK_WIN_RATE, entrantShrunkWinRate } from "../scoring/verdict";
@@ -106,11 +107,13 @@ export async function getPetDossier(id: number): Promise<PetDossier | null> {
 
   const rawWinRate = pet.races_run ? pet.wins / pet.races_run : null;
   const valComps = (score?.valuation_comps ?? {}) as { thin?: boolean; note?: string; comps?: unknown[] };
+  const ownerName = await lookupUsername(pet.owner_address);
 
   return {
     id: pet.id,
     name: pet.name,
     ownerAddress: pet.owner_address,
+    ownerName,
     imgUrl: pet.img_url,
     hatched: pet.hatched,
     rarity: rarityRef(pet.rarity),
@@ -297,7 +300,7 @@ export async function getWalletSummary(address: string): Promise<WalletSummary> 
 
   return {
     address: owner,
-    name: null,
+    name: await lookupUsername(owner),
     petCount: rows.length,
     hatchedCount: hatched.length,
     stableValue: {
@@ -467,6 +470,7 @@ function leaderboardRow(rank: number, p: PetBaseRow | undefined, petId: number, 
     name: p?.name ?? null,
     imgUrl: p?.img_url ?? null,
     ownerAddress: p?.owner_address ?? null,
+    ownerName: null, // filled by withOwnerNames() in one batched lookup
     rarity: rarityRef(p?.rarity ?? 0),
     value,
     confirmedQuality: cq,
@@ -476,6 +480,16 @@ function leaderboardRow(rank: number, p: PetBaseRow | undefined, petId: number, 
     racesRun,
     earningsEth,
   };
+}
+
+// Resolve owner usernames for a page of rows in a single batched query, so a
+// 50-row board is one accounts lookup, not fifty.
+async function withOwnerNames(rows: LeaderboardRow[]): Promise<LeaderboardRow[]> {
+  const names = await lookupUsernames(rows.map((r) => r.ownerAddress));
+  for (const r of rows) {
+    r.ownerName = r.ownerAddress ? names.get(r.ownerAddress.toLowerCase()) ?? null : null;
+  }
+  return rows;
 }
 
 export async function getLeaderboard(
@@ -498,10 +512,12 @@ export async function getLeaderboard(
       limit,
       offset,
       total: count ?? 0,
-      rows: (data ?? []).map((r, i) => {
-        const cq = Number(r.confirmed_quality ?? 0);
-        return leaderboardRow(offset + i + 1, pets.get(r.pet_id as number), r.pet_id as number, cq, cq, null);
-      }),
+      rows: await withOwnerNames(
+        (data ?? []).map((r, i) => {
+          const cq = Number(r.confirmed_quality ?? 0);
+          return leaderboardRow(offset + i + 1, pets.get(r.pet_id as number), r.pet_id as number, cq, cq, null);
+        })
+      ),
       meta: { source: SOURCE, explanation: cfg.explanation },
     };
   }
@@ -520,8 +536,10 @@ export async function getLeaderboard(
       limit,
       offset,
       total: count ?? 0,
-      rows: (data ?? []).map((p, i) =>
-        leaderboardRow(offset + i + 1, p as PetBaseRow, p.id as number, p.elo != null ? Number(p.elo) : 0, scores.get(p.id as number) ?? 0, null)
+      rows: await withOwnerNames(
+        (data ?? []).map((p, i) =>
+          leaderboardRow(offset + i + 1, p as PetBaseRow, p.id as number, p.elo != null ? Number(p.elo) : 0, scores.get(p.id as number) ?? 0, null)
+        )
       ),
       meta: { source: SOURCE, explanation: cfg.explanation },
     };
@@ -546,8 +564,8 @@ export async function getLeaderboard(
       limit,
       offset,
       total: ranked.length,
-      rows: page.map((x, i) =>
-        leaderboardRow(offset + i + 1, x.p, x.p.id, x.shrunk, scores.get(x.p.id) ?? 0, null)
+      rows: await withOwnerNames(
+        page.map((x, i) => leaderboardRow(offset + i + 1, x.p, x.p.id, x.shrunk, scores.get(x.p.id) ?? 0, null))
       ),
       meta: { source: SOURCE, explanation: cfg.explanation },
     };
@@ -607,8 +625,8 @@ async function earningsLeaderboardFallback(limit: number, offset: number, explan
     limit,
     offset,
     total,
-    rows: pageIds.map(([id, wei], i) =>
-      leaderboardRow(offset + i + 1, pets.get(id), id, wei / 1e18, scores.get(id) ?? 0, wei / 1e18)
+    rows: await withOwnerNames(
+      pageIds.map(([id, wei], i) => leaderboardRow(offset + i + 1, pets.get(id), id, wei / 1e18, scores.get(id) ?? 0, wei / 1e18))
     ),
     meta: { source: SOURCE, explanation },
   };

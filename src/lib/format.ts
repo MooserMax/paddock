@@ -6,6 +6,15 @@ export function shortAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+// The single rule for what to show for a wallet anywhere on the site: the
+// Gigaverse username when we have resolved one, else the truncated address.
+// Never fabricated. Used by <OwnerLabel> (HTML surfaces) and resolveOwnerName
+// (string surfaces: OG image, <title> metadata) so the rule lives in one place.
+export function ownerDisplay(username: string | null | undefined, address: string): string {
+  const u = username?.trim();
+  return u && u.length > 0 ? u : shortAddress(address);
+}
+
 export function formatEth(value: number | null | undefined, places = 4): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "unknown";
   return `${value.toFixed(places)} ETH`;
