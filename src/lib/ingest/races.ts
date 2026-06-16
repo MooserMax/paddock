@@ -97,11 +97,20 @@ export async function scanRaces(budgetMs: number): Promise<ScanResult> {
 
 export interface HydrateResult {
   hydrated: number;
+  terminal: number;
   remaining: number;
 }
 
-// Fill in race details (track, fees, owners, payouts) from the public race
-// API for resolved races the scanner has seen, politely and resumably.
+// A race that reached the game's terminal phase (4) without ever producing a
+// finalRanking never ran: it was created but did not draw enough entrants and
+// expired. We mark these hydrated=true while leaving resolved=false, so they are
+// a distinct "abandoned" state, no longer retried forever and no longer counted
+// as pending against the resolved total.
+const TERMINAL_PHASE = 4;
+
+// Fill in race details from the public race API. Resolved races get full details
+// + entries; terminal (expired-unfilled) races get classified so they stop being
+// retried; open races are left hydrated=false for a later run.
 export async function hydrateRaces(maxRaces: number): Promise<HydrateResult> {
   const { data, error, count } = await db()
     .from("races")
@@ -112,14 +121,32 @@ export async function hydrateRaces(maxRaces: number): Promise<HydrateResult> {
   if (error) throw new Error(`hydration candidate query failed: ${error.message}`);
 
   let hydrated = 0;
+  let terminal = 0;
   for (const row of data ?? []) {
     const race = await fetchRace(row.race_id);
     await sleep(REQUEST_GAP_MS);
-    // Resolved is signalled by a populated finalRanking, not a specific phase
-    // number (resolved races are phase 3 or 4). Open races are left for a later
-    // run, still hydrated=false.
+    if (!race.success) continue;
+
     const isResolved = Array.isArray(race.finalRanking) && race.finalRanking.length > 0;
-    if (!race.success || !isResolved) continue;
+    if (!isResolved) {
+      // Expired without running: classify terminal so it stops being a candidate
+      // and stops dragging the resolved count. Open races (phase < 4) stay pending.
+      if (typeof race.phase === "number" && race.phase >= TERMINAL_PHASE) {
+        const { error: tErr } = await db()
+          .from("races")
+          .update({
+            field_size: race.fieldSize ?? null,
+            track_length: race.trackLength ?? null,
+            entry_fee_wei: race.entryFee ?? null,
+            race_start: race.raceStart ? new Date(race.raceStart * 1000).toISOString() : null,
+            hydrated: true,
+          })
+          .eq("race_id", row.race_id);
+        if (tErr) throw new Error(`terminal-race classify failed: ${tErr.message}`);
+        terminal += 1;
+      }
+      continue;
+    }
 
     const maxFinishMs = race.finishTimes.length > 0 ? Math.max(...race.finishTimes) : 0;
     const resolvedAt = new Date((race.raceStart + maxFinishMs / 1000) * 1000).toISOString();
@@ -164,7 +191,7 @@ export async function hydrateRaces(maxRaces: number): Promise<HydrateResult> {
     hydrated += 1;
   }
 
-  return { hydrated, remaining: (count ?? 0) - hydrated };
+  return { hydrated, terminal, remaining: (count ?? 0) - hydrated - terminal };
 }
 
 // API-driven forward discovery. The public RPC's eth_getLogs does not serve

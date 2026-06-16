@@ -620,9 +620,16 @@ export async function getSiteStats(): Promise<SiteStats> {
     const { count: n } = await q;
     return n ?? 0;
   };
-  const [racesResolved, racesCreated, totalPets, hatchedPets, sale, top, price, freshPet, raceScan] = await Promise.all([
+  // Abandoned = created but never ran (resolved=false, hydrated=true), the
+  // terminal-unfilled state, distinct from the resolved total and from pending.
+  const abandonedQuery = async () => {
+    const { count: n } = await db().from("races").select("*", { count: "exact", head: true }).eq("resolved", false).eq("hydrated", true);
+    return n ?? 0;
+  };
+  const [racesResolved, racesCreated, racesAbandoned, totalPets, hatchedPets, sale, top, price, freshPet, raceScan] = await Promise.all([
     count("races", ["resolved", true]),
     count("races"),
+    abandonedQuery(),
     count("pets"),
     count("pets", ["hatched", true]),
     db().from("sales").select("token_id, price_eth, sold_at").not("price_eth", "is", null).order("price_eth", { ascending: false }).limit(1).maybeSingle(),
@@ -641,6 +648,7 @@ export async function getSiteStats(): Promise<SiteStats> {
   return {
     racesResolved,
     racesCreated,
+    racesAbandoned,
     totalPets,
     hatchedPets,
     recentBigSale: sale.data ? { tokenId: sale.data.token_id as number, priceEth: Number(sale.data.price_eth), soldAt: sale.data.sold_at as string } : null,

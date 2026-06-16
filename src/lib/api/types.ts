@@ -268,6 +268,8 @@ export interface RaceListResponse {
 export interface SiteStats {
   racesResolved: number;
   racesCreated: number;
+  // Created but never run: too few entrants, expired. Distinct from pending.
+  racesAbandoned: number;
   totalPets: number;
   hatchedPets: number;
   recentBigSale: { tokenId: number; priceEth: number; soldAt: string } | null;
