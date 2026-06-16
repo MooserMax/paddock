@@ -16,11 +16,15 @@ export const maxDuration = 60; // Hobby hard cap. Every path below aims for ~40s
 // processes a chunk, reports moreRemain=true, and the next ping continues from
 // the advanced cursor. The full valuation/calibration recompute is NOT on this
 // path (it cannot fit 60s); it runs via the GitHub Action (workflow_dispatch).
-const MAX_RACES_PER_CALL = 25; // forward catch-up cap per call
-const MAX_HYDRATE_PER_CALL = 15; // open -> resolved enrichment cap per call
-const PET_BUDGET = 150; // just-raced pets refreshed (then re-scored) per call
-const RACE_DEADLINE_MS = 30_000; // wall-clock budget for the race-API polling
-const SOFT_DEADLINE_MS = 45_000; // stop starting new work past this
+// Budgets are sized so a steady-state call lands well under 30s (friendly to an
+// external scheduler's request timeout, e.g. cron-job.org), and any call stays
+// far under Vercel's 60s function cap. A large delta (post-downtime) is chunked
+// across calls via moreRemain rather than run long.
+const MAX_RACES_PER_CALL = 20; // forward catch-up cap per call
+const MAX_HYDRATE_PER_CALL = 12; // open -> resolved enrichment cap per call
+const PET_BUDGET = 120; // just-raced pets refreshed (then re-scored) per call
+const RACE_DEADLINE_MS = 16_000; // wall-clock budget for the race-API polling
+const SOFT_DEADLINE_MS = 24_000; // stop starting new work past this
 const LOCK_KEY = "ingest_lock";
 const LOCK_TTL_MS = 90_000; // a crashed run self-releases after this
 
