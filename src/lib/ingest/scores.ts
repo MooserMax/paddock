@@ -113,6 +113,79 @@ async function loadSales(): Promise<Map<number, { priceEth: number; soldAt: stri
   return map;
 }
 
+// Load a bounded set of pets/traits by id, chunked to stay under the row cap.
+const BY_ID_CHUNK = 200;
+
+async function loadPetsByIds(ids: number[]): Promise<PetRow[]> {
+  const out: PetRow[] = [];
+  for (let i = 0; i < ids.length; i += BY_ID_CHUNK) {
+    const { data, error } = await db()
+      .from("pets")
+      .select(
+        "id, rarity, races_run, max_races, wins, start_min, start_max, speed_min, speed_max, stamina_min, stamina_max, finish_min, finish_max, reveals_start, reveals_speed, reveals_stamina, reveals_finish"
+      )
+      .in("id", ids.slice(i, i + BY_ID_CHUNK));
+    if (error) throw new Error(`pets-by-ids load failed: ${error.message}`);
+    out.push(...((data as PetRow[]) ?? []));
+  }
+  return out;
+}
+
+async function loadTraitsByIds(ids: number[]): Promise<Map<number, TraitRow[]>> {
+  const map = new Map<number, TraitRow[]>();
+  for (let i = 0; i < ids.length; i += BY_ID_CHUNK) {
+    const { data, error } = await db()
+      .from("pet_traits")
+      .select("pet_id, trait_id, tier")
+      .in("pet_id", ids.slice(i, i + BY_ID_CHUNK));
+    if (error) throw new Error(`traits-by-ids load failed: ${error.message}`);
+    for (const row of (data as TraitRow[]) ?? []) {
+      const list = map.get(row.pet_id) ?? [];
+      list.push(row);
+      map.set(row.pet_id, list);
+    }
+  }
+  return map;
+}
+
+// Incremental scoring for a specific set of pets (the ones that just raced or were
+// just synced). Writes ONLY the score columns, so the existing valuation band on
+// each row is preserved untouched: valuation depends on the full sale comp pool
+// and is refreshed by the full materializeScores() run, not on the 15-minute path.
+// This is what keeps the per-cycle ingest fast enough for a 60s function limit.
+export async function materializeScoresFor(petIds: number[]): Promise<{ scored: number }> {
+  const uniq = [...new Set(petIds)].filter((n) => Number.isInteger(n) && n > 0);
+  if (uniq.length === 0) return { scored: 0 };
+
+  const [pets, traitMap] = await Promise.all([loadPetsByIds(uniq), loadTraitsByIds(uniq)]);
+  const rows = pets.map((row) => {
+    const score = scorePet(toPetInput(row, traitMap.get(row.id) ?? []));
+    return {
+      pet_id: row.id,
+      reveal_progress: round(score.revealProgress, 4),
+      traits_revealed: score.traitsRevealed,
+      traits_total: score.traitsTotal,
+      confirmed_quality: round(score.confirmedQuality, 3),
+      upside: round(score.upside, 3),
+      fit_500: round(score.fit[500], 2),
+      fit_1200: round(score.fit[1200], 2),
+      fit_2400: round(score.fit[2400], 2),
+      fit_3000: round(score.fit[3000], 2),
+      best_distance: score.bestDistance,
+      next_milestone_in: score.nextMilestoneIn,
+      updated_at: new Date().toISOString(),
+    };
+  });
+
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await db()
+      .from("pet_scores")
+      .upsert(rows.slice(i, i + 500), { onConflict: "pet_id" });
+    if (error) throw new Error(`pet_scores incremental upsert failed: ${error.message}`);
+  }
+  return { scored: rows.length };
+}
+
 export interface MaterializeResult {
   scored: number;
   valued: number;

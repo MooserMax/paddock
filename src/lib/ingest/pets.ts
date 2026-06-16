@@ -80,6 +80,7 @@ export async function syncPetIds(ids: number[]): Promise<number> {
 export interface RollingSyncResult {
   candidates: number;
   synced: number;
+  ids: number[]; // the candidate ids touched this run, for incremental scoring
 }
 
 // How many of the most recently resolved races to scan for just-raced pets.
@@ -180,5 +181,5 @@ export async function rollingPetSync(options: {
   }
 
   const synced = await syncPetIds(wanted);
-  return { candidates: wanted.length, synced };
+  return { candidates: wanted.length, synced, ids: wanted };
 }

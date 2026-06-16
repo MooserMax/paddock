@@ -111,7 +111,7 @@ const TERMINAL_PHASE = 4;
 // Fill in race details from the public race API. Resolved races get full details
 // + entries; terminal (expired-unfilled) races get classified so they stop being
 // retried; open races are left hydrated=false for a later run.
-export async function hydrateRaces(maxRaces: number): Promise<HydrateResult> {
+export async function hydrateRaces(maxRaces: number, deadline?: number): Promise<HydrateResult> {
   const { data, error, count } = await db()
     .from("races")
     .select("race_id", { count: "exact" })
@@ -123,6 +123,9 @@ export async function hydrateRaces(maxRaces: number): Promise<HydrateResult> {
   let hydrated = 0;
   let terminal = 0;
   for (const row of data ?? []) {
+    // Stop cleanly if we are out of wall-clock budget; the remaining count is
+    // returned so the caller knows more work is pending for the next run.
+    if (deadline && Date.now() > deadline) break;
     const race = await fetchRace(row.race_id);
     await sleep(REQUEST_GAP_MS);
     if (!race.success) continue;
@@ -210,7 +213,7 @@ export interface CatchUpResult {
 
 const MISSING_STREAK_LIMIT = 6;
 
-export async function catchUpRaces(maxRaces: number): Promise<CatchUpResult> {
+export async function catchUpRaces(maxRaces: number, deadline?: number): Promise<CatchUpResult> {
   const { data: maxRow } = await db()
     .from("races")
     .select("race_id")
@@ -225,7 +228,10 @@ export async function catchUpRaces(maxRaces: number): Promise<CatchUpResult> {
   let resolved = 0;
   let missing = 0;
 
-  while (missing < MISSING_STREAK_LIMIT && scanned < maxRaces) {
+  // Bounded by race count AND wall-clock: caughtUp stays false if we stop on the
+  // deadline before hitting the missing-streak frontier, so the caller continues
+  // from the new cursor next run.
+  while (missing < MISSING_STREAK_LIMIT && scanned < maxRaces && (!deadline || Date.now() < deadline)) {
     let race: Awaited<ReturnType<typeof fetchRace>> | null = null;
     try {
       race = await fetchRace(id);
