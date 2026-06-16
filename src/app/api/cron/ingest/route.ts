@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
   // historical gaps cheaply.
   await run("eth-price", () => syncEthPrice());
   await run("races-scan", () => scanRaces(20_000));
-  await run("pets", () => rollingPetSync({ maxPets: 400, staleMinutes: 30 }));
+  await run("pets", () => rollingPetSync({ maxPets: 400 }));
   await run("sales", () => syncSales());
   await run("scores", () => materializeScores());
   await run("calibration", () => runCalibration());

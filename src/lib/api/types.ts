@@ -212,6 +212,7 @@ export interface LeaderboardRow {
   petId: number;
   name: string | null;
   imgUrl: string | null;
+  ownerAddress: string | null; // links to the owner's stable; handle TBD
   rarity: RarityRef;
   value: number; // the metric's primary value
   confirmedQuality: number;

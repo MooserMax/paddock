@@ -439,17 +439,20 @@ interface PetBaseRow {
   id: number;
   name: string | null;
   img_url: string | null;
+  owner_address: string | null;
   rarity: number | null;
   elo: number | null;
   wins: number | null;
   races_run: number | null;
 }
 
+const PET_BASE_COLS = "id, name, img_url, owner_address, rarity, elo, wins, races_run";
+
 // Fetch base pet fields for a set of ids, returned as a lookup map.
 async function petsByIds(ids: number[]): Promise<Map<number, PetBaseRow>> {
   const { data, error } = await db()
     .from("pets")
-    .select("id, name, img_url, rarity, elo, wins, races_run")
+    .select(PET_BASE_COLS)
     .in("id", ids.length ? ids : [-1]);
   if (error) throw new Error(`pets lookup failed: ${error.message}`);
   return new Map((data ?? []).map((p) => [p.id as number, p as PetBaseRow]));
@@ -463,6 +466,7 @@ function leaderboardRow(rank: number, p: PetBaseRow | undefined, petId: number, 
     petId,
     name: p?.name ?? null,
     imgUrl: p?.img_url ?? null,
+    ownerAddress: p?.owner_address ?? null,
     rarity: rarityRef(p?.rarity ?? 0),
     value,
     confirmedQuality: cq,
@@ -505,7 +509,7 @@ export async function getLeaderboard(
   if (metric === "elo") {
     const { data, count } = await db()
       .from("pets")
-      .select("id, name, img_url, rarity, elo, wins, races_run", { count: "exact" })
+      .select(PET_BASE_COLS, { count: "exact" })
       .gt("races_run", 0)
       .order("elo", { ascending: false, nullsFirst: false })
       .range(offset, offset + limit - 1);
@@ -528,7 +532,7 @@ export async function getLeaderboard(
     // bounded high-win candidate set, then paginate.
     const { data } = await db()
       .from("pets")
-      .select("id, name, img_url, rarity, elo, wins, races_run")
+      .select(PET_BASE_COLS)
       .gte("races_run", cfg.minRaces ?? 5)
       .order("wins", { ascending: false })
       .limit(800);

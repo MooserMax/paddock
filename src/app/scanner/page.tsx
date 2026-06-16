@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { api, ApiClientError } from "@/lib/api/client";
-import type { RaceDetail, PetDossier } from "@/lib/api/types";
+import type { RaceDetail, PetDossier, OddsResponse } from "@/lib/api/types";
 import ScannerControls from "@/components/scanner/ScannerControls";
 import ScannerVerdict from "@/components/scanner/ScannerVerdict";
 import SingleHorseRead from "@/components/scanner/SingleHorseRead";
@@ -25,6 +25,7 @@ export default async function ScannerPage({ searchParams }: { searchParams: SP }
   const track = Number(searchParams.track ?? 1200);
   let result: RaceDetail | null = null;
   let single: PetDossier | null = null;
+  let odds: OddsResponse | null = null;
   let error: string | null = null;
   let scanned = false;
 
@@ -32,6 +33,11 @@ export default async function ScannerPage({ searchParams }: { searchParams: SP }
     scanned = true;
     try {
       result = await api.race(searchParams.race, mark, { revalidate: 60 });
+      // A resolved race shows its result and a self-grade; fetch the pre-race
+      // odds so the grade can name our favorite and its predicted probability.
+      if (result?.resolved) {
+        odds = await api.odds(searchParams.race, { revalidate: 120 }).catch(() => null);
+      }
     } catch (err) {
       error = err instanceof ApiClientError ? err.message : "Could not read that race.";
     }
@@ -95,7 +101,7 @@ export default async function ScannerPage({ searchParams }: { searchParams: SP }
             </div>
           )}
 
-          {result && <ScannerVerdict race={result} markedPetId={mark} />}
+          {result && <ScannerVerdict race={result} markedPetId={mark} odds={odds} />}
           {single && <SingleHorseRead pet={single} track={track} />}
         </div>
       </div>

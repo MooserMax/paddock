@@ -44,7 +44,7 @@ export default async function RacePage({ params, searchParams }: { params: { id:
       </header>
 
       <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
-        <ScannerVerdict race={race} markedPetId={mark} />
+        <ScannerVerdict race={race} markedPetId={mark} odds={odds} />
 
         <div className="space-y-6 lg:sticky lg:top-20 lg:self-start">
           {odds && (

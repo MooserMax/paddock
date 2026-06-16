@@ -82,17 +82,22 @@ export interface RollingSyncResult {
   synced: number;
 }
 
+// How many of the most recently resolved races to scan for just-raced pets.
+// Far more than resolve in one ingest cycle, so no fresh result is ever missed.
+const RECENT_RACE_WINDOW = 300;
+
 // Rolling refresh priority:
-//   1. pets that appear in recent race entries but are missing or stale in
-//      our pets table (their reveals likely just changed)
+//   1. pets whose most recent race resolved AFTER we last synced them: they
+//      carry a new result (ELO, wins, reveals) we have not reflected yet. This
+//      is the leaderboard dopamine-loop guarantee: a horse that just raced
+//      refreshes on the very next ingest, no matter how recently it was synced,
+//      so its new ELO and win rate move the board within one cycle.
 //   2. a small probe past the highest known id, so new mints are discovered
 //   3. the longest-unsynced pets, so full-population coverage keeps rolling
 export async function rollingPetSync(options: {
   maxPets: number;
-  staleMinutes: number;
 }): Promise<RollingSyncResult> {
-  const { maxPets, staleMinutes } = options;
-  const staleCutoff = new Date(Date.now() - staleMinutes * 60_000).toISOString();
+  const { maxPets } = options;
   const wanted: number[] = [];
   const seen = new Set<number>();
   const add = (id: number) => {
@@ -102,17 +107,44 @@ export async function rollingPetSync(options: {
     }
   };
 
-  // 1. recently raced pets that are missing or stale
-  const { data: recentEntries, error: entriesError } = await db()
-    .from("race_entries")
-    .select("pet_id")
-    .order("race_id", { ascending: false })
-    .limit(2000);
-  if (entriesError) throw new Error(`recent entries query failed: ${entriesError.message}`);
-  const recentIds = [...new Set((recentEntries ?? []).map((r) => r.pet_id as number))];
+  // 1. pets with a race result newer than our last sync of them.
+  const { data: recentRaces, error: racesError } = await db()
+    .from("races")
+    .select("race_id, resolved_at")
+    .eq("resolved", true)
+    .order("resolved_at", { ascending: false, nullsFirst: false })
+    .limit(RECENT_RACE_WINDOW);
+  if (racesError) throw new Error(`recent races query failed: ${racesError.message}`);
+  const resolvedAtByRace = new Map<number, string>();
+  for (const r of recentRaces ?? []) {
+    if (r.resolved_at) resolvedAtByRace.set(r.race_id as number, r.resolved_at as string);
+  }
+  const recentRaceIds = [...resolvedAtByRace.keys()];
 
-  for (let i = 0; i < recentIds.length; i += 500) {
-    const chunk = recentIds.slice(i, i + 500);
+  // The latest race-resolution time per pet across that window. Entries are
+  // chunked by race id to stay under the row cap (~field-size rows per race).
+  const racedAtByPet = new Map<number, string>();
+  for (let i = 0; i < recentRaceIds.length; i += 80) {
+    const chunk = recentRaceIds.slice(i, i + 80);
+    const { data: entries, error: entriesError } = await db()
+      .from("race_entries")
+      .select("race_id, pet_id")
+      .in("race_id", chunk)
+      .limit(1000);
+    if (entriesError) throw new Error(`recent entries query failed: ${entriesError.message}`);
+    for (const e of entries ?? []) {
+      const racedAt = resolvedAtByRace.get(e.race_id as number);
+      if (!racedAt) continue;
+      const pid = e.pet_id as number;
+      const prev = racedAtByPet.get(pid);
+      if (!prev || racedAt > prev) racedAtByPet.set(pid, racedAt);
+    }
+  }
+
+  // Refresh any pet whose latest race is newer than our last sync of it.
+  const racedPetIds = [...racedAtByPet.keys()];
+  for (let i = 0; i < racedPetIds.length; i += 500) {
+    const chunk = racedPetIds.slice(i, i + 500);
     const { data: known, error: knownError } = await db()
       .from("pets")
       .select("id, last_synced_at")
@@ -121,7 +153,8 @@ export async function rollingPetSync(options: {
     const freshness = new Map((known ?? []).map((p) => [p.id as number, p.last_synced_at as string | null]));
     for (const id of chunk) {
       const syncedAt = freshness.get(id);
-      if (syncedAt === undefined || syncedAt === null || syncedAt < staleCutoff) add(id);
+      const racedAt = racedAtByPet.get(id)!;
+      if (syncedAt === undefined || syncedAt === null || syncedAt < racedAt) add(id);
     }
   }
 

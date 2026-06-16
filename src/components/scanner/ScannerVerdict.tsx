@@ -1,13 +1,20 @@
-import type { RaceDetail } from "@/lib/api/types";
+import type { RaceDetail, OddsResponse } from "@/lib/api/types";
 import VerdictBanner from "./VerdictBanner";
 import EntrantRow from "./EntrantRow";
+import RaceResult from "./RaceResult";
 import Panel from "@/components/ui/Panel";
 import { TRACK_LABEL } from "@/lib/display";
 import { formatEth } from "@/lib/format";
 
-// The full scanner read for a race: verdict banner, the honest caveat, race
-// terms, and the field ranked by threat. Shared by /race/[id] and /scanner.
-export default function ScannerVerdict({ race, markedPetId }: { race: RaceDetail; markedPetId?: number }) {
+// The full scanner read for a race. A resolved race shows its actual result and
+// a self-grade of our pre-race call; an upcoming race shows the verdict and the
+// field ranked by threat. Shared by /race/[id] and /scanner.
+export default function ScannerVerdict({ race, markedPetId, odds }: { race: RaceDetail; markedPetId?: number; odds?: OddsResponse | null }) {
+  const isResolved = race.resolved && race.entrants.some((e) => e.finishPosition != null);
+  if (isResolved) {
+    return <RaceResult race={race} odds={odds} markedPetId={markedPetId} />;
+  }
+
   const sorted = [...race.entrants].sort((a, b) => b.shrunkWinRate - a.shrunkWinRate);
   const feeEth = race.entryFeeWei ? Number(race.entryFeeWei) / 1e18 : 0;
 

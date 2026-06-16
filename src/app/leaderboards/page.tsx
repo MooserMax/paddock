@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { api } from "@/lib/api/client";
 import type { LeaderboardMetric, LeaderboardResponse } from "@/lib/api/types";
 import RarityBadge from "@/components/RarityBadge";
-import { formatEth, formatPct, formatScore } from "@/lib/format";
+import { formatEth, formatPct, formatScore, shortAddress } from "@/lib/format";
 
 export const metadata: Metadata = {
   title: "Leaderboards",
@@ -65,36 +65,48 @@ export default async function LeaderboardsPage({ searchParams }: { searchParams:
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border hairline">
-          <div className="hidden grid-cols-[2.5rem_1fr_7rem_5rem_7rem_6rem] gap-3 border-b hairline-strong px-4 py-2.5 md:grid">
+          <div className="hidden grid-cols-[2.5rem_1fr_7rem_8rem_5rem_7rem_6rem] gap-3 border-b hairline-strong px-4 py-2.5 md:grid">
             <span className="type-micro uppercase text-ink-faint">#</span>
             <span className="type-micro uppercase text-ink-faint">Gigling</span>
             <span className="type-micro uppercase text-ink-faint">{METRICS.find((m) => m.key === metric)!.label}</span>
+            <span className="type-micro uppercase text-ink-faint">Owner</span>
             <span className="type-micro text-right uppercase text-ink-faint">ELO</span>
             <span className="type-micro text-right uppercase text-ink-faint">Win (raw)</span>
             <span className="type-micro text-right uppercase text-ink-faint">Races</span>
           </div>
           {board.rows.map((r) => (
-            <Link
+            // Row is a div, not a link, so the Gigling and Owner cells can each be
+            // their own link (a row-wide anchor cannot legally wrap a second one).
+            <div
               key={r.petId}
-              href={`/pet/${r.petId}`}
-              className="transition-paddock grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-b hairline px-4 py-3 last:border-0 hover:bg-paper-raised md:grid-cols-[2.5rem_1fr_7rem_5rem_7rem_6rem]"
+              className="transition-paddock grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-b hairline px-4 py-3 last:border-0 hover:bg-paper-raised md:grid-cols-[2.5rem_1fr_7rem_8rem_5rem_7rem_6rem]"
             >
               <span className="type-data tabular-nums text-ink-faint">{r.rank}</span>
-              <span className="flex items-center gap-2">
+              <Link href={`/pet/${r.petId}`} className="flex min-w-0 items-center gap-2 transition-paddock hover:text-glow">
                 <span className="type-data truncate text-ink">{r.name ?? `#${r.petId}`}</span>
                 <RarityBadge rarity={r.rarity.value} size="sm" />
-              </span>
+              </Link>
               <span className="type-data tabular-nums" style={{ color: "var(--gold)" }}>
                 {valueFor(metric, r.value)}
-                {METRICS.find((m) => m.key === metric)!.unit && metric !== "earnings" ? "" : ""}
               </span>
+              {r.ownerAddress ? (
+                <Link
+                  href={`/wallet/${r.ownerAddress}`}
+                  className="type-data hidden truncate tabular-nums text-ink-faint transition-paddock hover:text-glow md:block"
+                  title={r.ownerAddress}
+                >
+                  {shortAddress(r.ownerAddress)}
+                </Link>
+              ) : (
+                <span className="type-data hidden tabular-nums text-ink-faint md:block">-</span>
+              )}
               <span className="type-data hidden text-right tabular-nums text-ink-soft md:block">{r.elo ?? "-"}</span>
               <span className="type-data hidden text-right tabular-nums text-ink-soft md:block">
                 {formatPct(r.shrunkWinRate)}
                 <span className="text-ink-faint"> ({r.rawWinRate != null ? formatPct(r.rawWinRate) : "-"})</span>
               </span>
               <span className="type-data hidden text-right tabular-nums text-ink-faint md:block">{r.racesRun}</span>
-            </Link>
+            </div>
           ))}
         </div>
       )}
