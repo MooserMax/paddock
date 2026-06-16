@@ -11,7 +11,7 @@
 // PRIMARY = fully-revealed horses (leak-free). ROBUSTNESS = all entries, using
 // the current best-estimate fit (not outcome leakage, only estimate precision).
 import { db } from "../src/lib/db";
-import { trackFit, revealProgress, STAT_KEYS, type PetInput } from "../src/lib/scoring/engine";
+import { trackFit, revealProgress, type PetInput } from "../src/lib/scoring/engine";
 
 const TRACKS = [500, 1200, 2400, 3000] as const;
 
