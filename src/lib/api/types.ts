@@ -206,7 +206,7 @@ export interface OddsResponse {
   meta: { source: string };
 }
 
-export type LeaderboardMetric = "cq" | "elo" | "winrate" | "earnings";
+export type LeaderboardMetric = "cq" | "elo" | "winrate" | "earnings" | "upside";
 
 export interface LeaderboardRow {
   rank: number;
@@ -216,13 +216,15 @@ export interface LeaderboardRow {
   ownerAddress: string | null; // links to the owner's stable
   ownerName: string | null; // resolved Gigaverse username, null if none
   rarity: RarityRef;
-  value: number; // the metric's primary value
+  value: number; // the metric's primary value (for upside: reveal-adjusted upside)
   confirmedQuality: number;
   elo: number | null;
   shrunkWinRate: number;
   rawWinRate: number | null;
   racesRun: number;
   earningsEth: number | null;
+  revealPct: number | null; // 0..1, populated for the upside board
+  upsideRaw: number | null; // raw upside, populated for the upside board
 }
 
 export interface CalibrationBucket {

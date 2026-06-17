@@ -6,7 +6,7 @@ import type { LeaderboardMetric } from "@/lib/api/types";
 
 export const dynamic = "force-dynamic";
 
-const VALID_METRICS: LeaderboardMetric[] = ["cq", "elo", "winrate", "earnings"];
+const VALID_METRICS: LeaderboardMetric[] = ["cq", "elo", "winrate", "earnings", "upside"];
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
 

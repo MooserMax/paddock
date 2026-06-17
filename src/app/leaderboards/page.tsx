@@ -2,38 +2,31 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { api } from "@/lib/api/client";
 import type { LeaderboardMetric, LeaderboardResponse } from "@/lib/api/types";
-import RarityBadge from "@/components/RarityBadge";
-import OwnerLabel from "@/components/OwnerLabel";
-import { formatEth, formatPct, formatScore } from "@/lib/format";
+import LeaderboardTable from "@/components/leaderboards/LeaderboardTable";
 
 export const metadata: Metadata = {
   title: "Leaderboards",
-  description: "The best Giglings by confirmed quality, ELO, win rate (shrunk, with raw shown), and earnings. Every column explained.",
+  description: "The best Giglings by confirmed quality, ELO, win rate (shrunk, with raw shown), earnings, and reveal-adjusted upside. Every column explained.",
 };
 
 // Short window so the board reflects current rankings AND freshly-resolved owner
 // usernames within ~30s (the data layer is always fresh; this is the render cache).
 export const revalidate = 30;
 
-const METRICS: { key: LeaderboardMetric; label: string; unit: string }[] = [
-  { key: "cq", label: "Confirmed quality", unit: "" },
-  { key: "elo", label: "ELO", unit: "" },
-  { key: "winrate", label: "Win rate", unit: "shrunk" },
-  { key: "earnings", label: "Earnings", unit: "ETH" },
+const METRICS: { key: LeaderboardMetric; label: string }[] = [
+  { key: "cq", label: "Confirmed quality" },
+  { key: "elo", label: "ELO" },
+  { key: "winrate", label: "Win rate" },
+  { key: "earnings", label: "Earnings" },
+  { key: "upside", label: "Upside" },
 ];
-
-function valueFor(metric: LeaderboardMetric, value: number): string {
-  if (metric === "cq") return formatScore(value);
-  if (metric === "elo") return String(Math.round(value));
-  if (metric === "winrate") return formatPct(value);
-  return formatEth(value, 4);
-}
 
 export default async function LeaderboardsPage({ searchParams }: { searchParams: { metric?: string } }) {
   const metric = (METRICS.find((m) => m.key === searchParams.metric)?.key ?? "cq") as LeaderboardMetric;
   let board: LeaderboardResponse | null = null;
   try {
-    board = await api.leaderboard(metric, 50, 0, { revalidate: 30 });
+    // Up to 100 rows; the table windows them so the initial paint stays light.
+    board = await api.leaderboard(metric, 100, 0, { revalidate: 30 });
   } catch {
     // empty state below
   }
@@ -67,53 +60,13 @@ export default async function LeaderboardsPage({ searchParams }: { searchParams:
           <p className="type-body mt-1 text-ink-soft">This board has no entries to show.</p>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border hairline">
-          <div className="hidden grid-cols-[2.5rem_1fr_7rem_8rem_5rem_7rem_6rem] gap-3 border-b hairline-strong px-4 py-2.5 md:grid">
-            <span className="type-micro uppercase text-ink-faint">#</span>
-            <span className="type-micro uppercase text-ink-faint">Gigling</span>
-            <span className="type-micro uppercase text-ink-faint">{METRICS.find((m) => m.key === metric)!.label}</span>
-            <span className="type-micro uppercase text-ink-faint">Owner</span>
-            <span className="type-micro text-right uppercase text-ink-faint">ELO</span>
-            <span className="type-micro text-right uppercase text-ink-faint">Win (raw)</span>
-            <span className="type-micro text-right uppercase text-ink-faint">Races</span>
-          </div>
-          {board.rows.map((r) => (
-            // Row is a div, not a link, so the Gigling and Owner cells can each be
-            // their own link (a row-wide anchor cannot legally wrap a second one).
-            <div
-              key={r.petId}
-              className="transition-paddock grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-b hairline px-4 py-3 last:border-0 hover:bg-paper-raised md:grid-cols-[2.5rem_1fr_7rem_8rem_5rem_7rem_6rem]"
-            >
-              <span className="type-data tabular-nums text-ink-faint">{r.rank}</span>
-              <Link href={`/pet/${r.petId}`} className="flex min-w-0 items-center gap-2 transition-paddock hover:text-glow">
-                <span className="type-data truncate text-ink">{r.name ?? `#${r.petId}`}</span>
-                <RarityBadge rarity={r.rarity.value} size="sm" />
-              </Link>
-              <span className="type-data tabular-nums" style={{ color: "var(--gold)" }}>
-                {valueFor(metric, r.value)}
-              </span>
-              {r.ownerAddress ? (
-                <OwnerLabel
-                  address={r.ownerAddress}
-                  name={r.ownerName}
-                  className="type-data hidden truncate text-ink-faint transition-paddock hover:text-glow md:block"
-                />
-              ) : (
-                <span className="type-data hidden tabular-nums text-ink-faint md:block">-</span>
-              )}
-              <span className="type-data hidden text-right tabular-nums text-ink-soft md:block">{r.elo ?? "-"}</span>
-              <span className="type-data hidden text-right tabular-nums text-ink-soft md:block">
-                {formatPct(r.shrunkWinRate)}
-                <span className="text-ink-faint"> ({r.rawWinRate != null ? formatPct(r.rawWinRate) : "-"})</span>
-              </span>
-              <span className="type-data hidden text-right tabular-nums text-ink-faint md:block">{r.racesRun}</span>
-            </div>
-          ))}
-        </div>
+        <LeaderboardTable rows={board.rows} metric={metric} total={board.total} />
       )}
 
       <p className="type-micro mt-4 normal-case text-ink-faint">
-        Win rate is Bayesian-shrunk so small samples do not top the board; the raw record is shown in parentheses. Served by{" "}
+        {metric === "winrate" && "Win rate is Bayesian-shrunk so small samples do not top the board; the raw record is shown in parentheses. "}
+        {metric === "upside" && "Upside is potential, never proof, and here it is adjusted for reveal level so the board surfaces promise, not mere ignorance. "}
+        Served by{" "}
         <Link href={`/api/v1/leaderboard?metric=${metric}`} className="underline transition-paddock hover:text-glow">/api/v1/leaderboard</Link>.
       </p>
     </div>

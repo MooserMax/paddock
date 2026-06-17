@@ -477,7 +477,61 @@ const METRIC_CONFIG: Record<LeaderboardMetric, { column: string; explanation: st
   elo: { column: "elo", explanation: "ELO: relative finishing record. Starts at 1500 and moves purely on race results." },
   winrate: { column: "shrunk_winrate", explanation: "Win rate, shrunk toward the 14.18% population baseline so small samples do not top the board. Raw record shown alongside.", minRaces: 5 },
   earnings: { column: "earnings", explanation: "Total ETH won across resolved races." },
+  upside: { column: "upside", explanation: "Lightly revealed horses whose upside runs ahead of how little they have shown. Potential adjusted for reveal level (upside above the typical for that reveal level), not a prediction, and never raw upside (which just favors the least revealed). Reveal 2 to 60 percent." },
 };
+
+// Reveal-adjusted upside ranking. Raw upside decays mechanically with reveal
+// (less revealed means more unrealized headroom), so a naive sort by upside ranks
+// the least-revealed horses on top, which is ranking by ignorance. Instead: build
+// a baseline of typical upside per reveal level from the real (revealed) population,
+// then rank by each horse's upside ABOVE that baseline, surfacing horses punching
+// above their reveal level rather than horses that merely reveal less. The band
+// excludes 0-reveal constant-upside zombies (floor) and heavily-revealed horses
+// that belong on the CQ board (ceiling). Cached like earnings; the heavy full-table
+// pass runs at most once per TTL.
+const UPSIDE_FLOOR = 0.02; // revealPct >= this: excludes the 25k zero-reveal zombies (upside 24.000 etc.)
+const UPSIDE_CEIL = 0.6; // revealPct < this: heavily-revealed horses belong on CQ
+const UPSIDE_BIN = 0.05; // baseline bin width over revealPct
+const UPSIDE_TTL_MS = 5 * 60_000;
+let upsideCache: { ranked: { petId: number; dev: number; revealPct: number; upside: number }[]; at: number } | null = null;
+
+async function upsideRanked(): Promise<{ petId: number; dev: number; revealPct: number; upside: number }[]> {
+  if (upsideCache && Date.now() - upsideCache.at < UPSIDE_TTL_MS) return upsideCache.ranked;
+  const rows: { id: number; r: number; u: number }[] = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db().from("pet_scores").select("pet_id, reveal_progress, upside").order("pet_id", { ascending: true }).range(from, from + PAGE - 1);
+    if (error) throw new Error(`upside scan failed: ${error.message}`);
+    if (!data || data.length === 0) break;
+    for (const d of data) if (d.upside != null) rows.push({ id: d.pet_id as number, r: Number(d.reveal_progress ?? 0), u: Number(d.upside) });
+    if (data.length < PAGE) break;
+  }
+  // Baseline: binned mean upside over horses with ANY reveal (zombies excluded),
+  // so the "typical at this reveal level" is set by real horses, not the 0-reveal mass.
+  const bm = new Map<number, { n: number; s: number }>();
+  for (const x of rows) {
+    if (x.r <= 0.001) continue;
+    const b = Math.floor(x.r / UPSIDE_BIN);
+    const e = bm.get(b) ?? { n: 0, s: 0 };
+    e.n += 1;
+    e.s += x.u;
+    bm.set(b, e);
+  }
+  const baseline = (r: number): number | null => {
+    const e = bm.get(Math.floor(r / UPSIDE_BIN));
+    return e ? e.s / e.n : null;
+  };
+  const ranked = rows
+    .filter((x) => x.r >= UPSIDE_FLOOR && x.r < UPSIDE_CEIL)
+    .map((x) => {
+      const b = baseline(x.r);
+      return b == null ? null : { petId: x.id, dev: x.u - b, revealPct: x.r, upside: x.u };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null)
+    .sort((a, b) => b.dev - a.dev);
+  upsideCache = { ranked, at: Date.now() };
+  return ranked;
+}
 
 interface PetBaseRow {
   id: number;
@@ -520,6 +574,8 @@ function leaderboardRow(rank: number, p: PetBaseRow | undefined, petId: number, 
     rawWinRate: racesRun ? wins / racesRun : null,
     racesRun,
     earningsEth,
+    revealPct: null, // set per-row only on the upside board
+    upsideRaw: null,
   };
 }
 
@@ -618,6 +674,28 @@ export async function getLeaderboard(
       total: ranked.length,
       rows: await withOwnerNames(
         page.map((x, i) => leaderboardRow(offset + i + 1, x.p, x.p.id, x.shrunk, scores.get(x.p.id) ?? 0, null))
+      ),
+      meta: { source: SOURCE, explanation: cfg.explanation },
+    };
+  }
+
+  if (metric === "upside") {
+    const ranked = await upsideRanked();
+    const page = ranked.slice(offset, offset + limit);
+    const ids = page.map((x) => x.petId);
+    const [pets, scores] = await Promise.all([petsByIds(ids), scoresByIds(ids)]);
+    return {
+      metric,
+      limit,
+      offset,
+      total: ranked.length,
+      rows: await withOwnerNames(
+        page.map((x, i) => {
+          const row = leaderboardRow(offset + i + 1, pets.get(x.petId), x.petId, x.dev, scores.get(x.petId) ?? 0, null);
+          row.revealPct = x.revealPct;
+          row.upsideRaw = x.upside;
+          return row;
+        })
       ),
       meta: { source: SOURCE, explanation: cfg.explanation },
     };
