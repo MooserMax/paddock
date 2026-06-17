@@ -28,6 +28,7 @@ async function run(name: string, fn: () => Promise<unknown>) {
 await run("eth-price", () => syncEthPrice());
 await run("races-scan", () => scanRaces(60_000));
 await run("races-catchup", () => catchUpRaces(5000));
+await run("abandon-shells", () => abandonStaleShells(250));
 await run("races-hydrate", () => hydrateRaces(1000));
 await run("pets", () => rollingPetSync({ maxPets: 800 }));
 await run("sales", () => syncSales());

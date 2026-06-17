@@ -111,87 +111,104 @@ const TERMINAL_PHASE = 4;
 // Fill in race details from the public race API. Resolved races get full details
 // + entries; terminal (expired-unfilled) races get classified so they stop being
 // retried; open races are left hydrated=false for a later run.
-export async function hydrateRaces(maxRaces: number, deadline?: number): Promise<HydrateResult> {
-  const { data, error, count } = await db()
-    .from("races")
-    .select("race_id", { count: "exact" })
-    .eq("hydrated", false)
-    .order("race_id", { ascending: true })
-    .limit(maxRaces);
+export async function hydrateRaces(maxRaces: number, deadline?: number, gapMs: number = REQUEST_GAP_MS, staleLagIds = 0): Promise<HydrateResult> {
+  // Candidates are mostly NEWEST (the live frontier must resolve every cycle and
+  // can never be starved behind old un-resolvable shells), plus a small slice of
+  // OLDEST so long-dead phase-1 shells get reached and cleared. EVERY race is
+  // fetched and checked, so a finished race is always resolved and never abandoned
+  // blindly; only a fetched, confirmed-not-finished, stale race is abandoned.
+  const { data: maxRow } = await db().from("races").select("race_id").order("race_id", { ascending: false }).limit(1).maybeSingle();
+  const maxId = (maxRow?.race_id as number | undefined) ?? 0;
+
+  const oldestSlice = staleLagIds > 0 ? Math.min(8, Math.floor(maxRaces / 3)) : 0;
+  const { data: newest, error, count } = await db()
+    .from("races").select("race_id", { count: "exact" })
+    .eq("hydrated", false).order("race_id", { ascending: false }).limit(maxRaces - oldestSlice);
   if (error) throw new Error(`hydration candidate query failed: ${error.message}`);
+  let oldest: { race_id: number }[] = [];
+  if (oldestSlice > 0) {
+    const { data } = await db().from("races").select("race_id").eq("hydrated", false).order("race_id", { ascending: true }).limit(oldestSlice);
+    oldest = (data ?? []) as { race_id: number }[];
+  }
+  const seen = new Set<number>();
+  const candidates: number[] = [];
+  for (const r of [...((newest ?? []) as { race_id: number }[]), ...oldest]) {
+    if (!seen.has(r.race_id)) { seen.add(r.race_id); candidates.push(r.race_id); }
+  }
 
   let hydrated = 0;
   let terminal = 0;
-  for (const row of data ?? []) {
-    // Stop cleanly if we are out of wall-clock budget; the remaining count is
-    // returned so the caller knows more work is pending for the next run.
+  for (const raceId of candidates) {
+    // Stop cleanly if we are out of wall-clock budget; remaining is returned so
+    // the caller knows more work is pending for the next run.
     if (deadline && Date.now() > deadline) break;
-    const race = await fetchRace(row.race_id);
-    await sleep(REQUEST_GAP_MS);
-    if (!race.success) continue;
+    const race = await fetchRace(raceId);
+    await sleep(gapMs);
 
-    const isResolved = Array.isArray(race.finalRanking) && race.finalRanking.length > 0;
-    if (!isResolved) {
-      // Expired without running: classify terminal so it stops being a candidate
-      // and stops dragging the resolved count. Open races (phase < 4) stay pending.
-      if (typeof race.phase === "number" && race.phase >= TERMINAL_PHASE) {
-        const { error: tErr } = await db()
-          .from("races")
-          .update({
-            field_size: race.fieldSize ?? null,
-            track_length: race.trackLength ?? null,
-            entry_fee_wei: race.entryFee ?? null,
-            race_start: race.raceStart ? new Date(race.raceStart * 1000).toISOString() : null,
-            hydrated: true,
-          })
-          .eq("race_id", row.race_id);
-        if (tErr) throw new Error(`terminal-race classify failed: ${tErr.message}`);
-        terminal += 1;
+    const isResolved = race.success && Array.isArray(race.finalRanking) && race.finalRanking.length > 0;
+    if (isResolved) {
+      const maxFinishMs = race.finishTimes.length > 0 ? Math.max(...race.finishTimes) : 0;
+      const resolvedAt = new Date((race.raceStart + maxFinishMs / 1000) * 1000).toISOString();
+      const { error: raceError } = await db()
+        .from("races")
+        .update({
+          field_size: race.fieldSize,
+          track_length: race.trackLength,
+          race_temp: race.raceTemp,
+          entry_fee_wei: race.entryFee,
+          creator: race.creator?.toLowerCase() ?? null,
+          payout_bps: race.payoutBps,
+          fee_bps: {
+            creator: race.creatorFeeBps,
+            protocol: race.protocolFeeBps,
+            protocolJuiced: race.protocolFeeBpsJuiced,
+            jackpot: race.jackpotBps,
+          },
+          race_start: new Date(race.raceStart * 1000).toISOString(),
+          resolved_at: resolvedAt,
+          resolved: true,
+          hydrated: true,
+        })
+        .eq("race_id", raceId);
+      if (raceError) throw new Error(`race hydration update failed: ${raceError.message}`);
+
+      const entryRows = race.finalRanking.map((petId, i) => ({
+        race_id: raceId,
+        pet_id: petId,
+        owner_address: race.petOwners[String(petId)]?.toLowerCase() ?? null,
+        finish_position: i + 1,
+        finish_time_ms: race.finishTimes[i] ?? null,
+        payout_wei: race.petPayouts[String(petId)]?.amount ?? null,
+      }));
+      if (entryRows.length > 0) {
+        const { error: entryError } = await db().from("race_entries").upsert(entryRows, { onConflict: "race_id,pet_id" });
+        if (entryError) throw new Error(`race_entries hydration failed: ${entryError.message}`);
       }
+      hydrated += 1;
       continue;
     }
 
-    const maxFinishMs = race.finishTimes.length > 0 ? Math.max(...race.finishTimes) : 0;
-    const resolvedAt = new Date((race.raceStart + maxFinishMs / 1000) * 1000).toISOString();
-
-    const { error: raceError } = await db()
-      .from("races")
-      .update({
-        field_size: race.fieldSize,
-        track_length: race.trackLength,
-        race_temp: race.raceTemp,
-        entry_fee_wei: race.entryFee,
-        creator: race.creator?.toLowerCase() ?? null,
-        payout_bps: race.payoutBps,
-        fee_bps: {
-          creator: race.creatorFeeBps,
-          protocol: race.protocolFeeBps,
-          protocolJuiced: race.protocolFeeBpsJuiced,
-          jackpot: race.jackpotBps,
-        },
-        race_start: new Date(race.raceStart * 1000).toISOString(),
-        resolved_at: resolvedAt,
-        resolved: true,
-        hydrated: true,
-      })
-      .eq("race_id", row.race_id);
-    if (raceError) throw new Error(`race hydration update failed: ${raceError.message}`);
-
-    const entryRows = race.finalRanking.map((petId, i) => ({
-      race_id: row.race_id,
-      pet_id: petId,
-      owner_address: race.petOwners[String(petId)]?.toLowerCase() ?? null,
-      finish_position: i + 1,
-      finish_time_ms: race.finishTimes[i] ?? null,
-      payout_wei: race.petPayouts[String(petId)]?.amount ?? null,
-    }));
-    if (entryRows.length > 0) {
-      const { error: entryError } = await db()
-        .from("race_entries")
-        .upsert(entryRows, { onConflict: "race_id,pet_id" });
-      if (entryError) throw new Error(`race_entries hydration failed: ${entryError.message}`);
+    // Not resolved. Abandon ONLY after fetching and confirming no finalRanking,
+    // when the race is terminal (phase >= 4) or stale (the frontier passed it by
+    // more than staleLagIds and it still never filled). Recent open races are left
+    // pending so they resolve once they finish. This is why a finished race in a
+    // backlog is never lost: we abandon only what we have checked.
+    const isTerminal = race.success && typeof race.phase === "number" && race.phase >= TERMINAL_PHASE;
+    const isStale = staleLagIds > 0 && maxId - raceId > staleLagIds;
+    if (isTerminal || isStale) {
+      const { error: tErr } = await db()
+        .from("races")
+        .update({
+          field_size: race.fieldSize ?? null,
+          track_length: race.trackLength ?? null,
+          entry_fee_wei: race.entryFee ?? null,
+          race_start: race.raceStart ? new Date(race.raceStart * 1000).toISOString() : null,
+          hydrated: true,
+        })
+        .eq("race_id", raceId);
+      if (tErr) throw new Error(`abandoned-race classify failed: ${tErr.message}`);
+      terminal += 1;
     }
-    hydrated += 1;
   }
 
   return { hydrated, terminal, remaining: (count ?? 0) - hydrated - terminal };

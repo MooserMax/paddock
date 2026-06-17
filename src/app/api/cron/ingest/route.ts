@@ -23,7 +23,9 @@ export const maxDuration = 60; // Hobby hard cap. Every path below aims for ~40s
 // across calls via moreRemain rather than run long.
 const MAX_RACES_PER_CALL = 45; // forward catch-up cap: must out-pace race creation
 const CATCHUP_GAP_MS = 300; // race-API polling gap during catch-up (vs 500 default)
-const MAX_HYDRATE_PER_CALL = 12; // open -> resolved enrichment cap per call
+const MAX_HYDRATE_PER_CALL = 36; // open -> resolved per call; ~28 newest out-pace the ~15/cycle finish rate with margin, 8 oldest clear zombies
+const HYDRATE_GAP_MS = 300; // race-API polling gap during hydration
+const ABANDON_LAG_IDS = 250; // unresolved shells this far below the frontier are abandoned
 const PET_BUDGET = 120; // just-raced pets refreshed (then re-scored) per call
 const ACCOUNT_LOOKUPS_PER_CALL = 6; // displayed-owner username lookups per call
 const ACCOUNT_REFRESH_DAYS = 14; // re-check a resolved address this infrequently
@@ -85,11 +87,13 @@ export async function GET(req: NextRequest) {
     const catchup = await catchUpRaces(MAX_RACES_PER_CALL, raceDeadline, CATCHUP_GAP_MS);
     steps.catchup = catchup;
 
-    // 2. Resolve any open races that have since finished (bounded, shares the
-    //    race-API budget; if catch-up used it all, this defers to the next run).
+    // 2. Resolve finished races (mostly newest-first, so the live frontier always
+    //    resolves within the cycle and is never starved behind old shells; a small
+    //    oldest slice clears confirmed-dead phase-1 zombies, fetched and checked so
+    //    a finished race is never abandoned blindly). Shares the race-API budget.
     let hydrate = { hydrated: 0, terminal: 0, remaining: 0 };
     if (Date.now() < raceDeadline) {
-      hydrate = await hydrateRaces(MAX_HYDRATE_PER_CALL, raceDeadline);
+      hydrate = await hydrateRaces(MAX_HYDRATE_PER_CALL, raceDeadline, HYDRATE_GAP_MS, ABANDON_LAG_IDS);
       steps.hydrate = hydrate;
     } else {
       steps.hydrateSkipped = "race deadline";

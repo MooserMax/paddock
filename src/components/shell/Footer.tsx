@@ -8,11 +8,13 @@ import { timeAgo } from "@/lib/format";
 // is never shown over a frozen number.
 export default async function Footer() {
   let petsSyncedAt: string | null = null;
-  let racesScannedAt: string | null = null;
+  let lastResolvedAt: string | null = null;
   try {
     const stats = await api.stats();
     petsSyncedAt = stats.petsSyncedAt;
-    racesScannedAt = stats.racesScannedAt;
+    // Resolution recency, not discovery: "Synced" must not read fresh while the
+    // newest resolved race is stale.
+    lastResolvedAt = stats.lastResolvedAt;
   } catch {
     // freshness line simply omits if stats are unavailable
   }
@@ -30,10 +32,10 @@ export default async function Footer() {
           <p className="type-micro max-w-xs uppercase leading-relaxed text-ink-faint">
             The open intelligence layer for Gigling Racing. One verified engine, never a fabricated number.
           </p>
-          {(petsSyncedAt || racesScannedAt) && (
+          {(petsSyncedAt || lastResolvedAt) && (
             <p className="type-micro text-ink-faint">
-              Synced {timeAgo(racesScannedAt ?? petsSyncedAt)}
-              {petsSyncedAt && racesScannedAt ? ` · pets ${timeAgo(petsSyncedAt)}` : ""}
+              Synced {timeAgo(lastResolvedAt ?? petsSyncedAt)}
+              {petsSyncedAt && lastResolvedAt ? ` · pets ${timeAgo(petsSyncedAt)}` : ""}
             </p>
           )}
         </div>

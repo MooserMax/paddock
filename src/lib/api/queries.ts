@@ -700,7 +700,7 @@ export async function getSiteStats(): Promise<SiteStats> {
     const { count: n } = await db().from("races").select("*", { count: "exact", head: true }).eq("resolved", false).eq("hydrated", true);
     return n ?? 0;
   };
-  const [racesResolved, racesCreated, racesAbandoned, totalPets, hatchedPets, sale, top, price, freshPet, raceScan] = await Promise.all([
+  const [racesResolved, racesCreated, racesAbandoned, totalPets, hatchedPets, sale, top, price, freshPet, raceScan, lastResolved] = await Promise.all([
     count("races", ["resolved", true]),
     count("races"),
     abandonedQuery(),
@@ -711,6 +711,10 @@ export async function getSiteStats(): Promise<SiteStats> {
     db().from("eth_price").select("usd").eq("id", 1).maybeSingle(),
     db().from("pets").select("last_synced_at").order("last_synced_at", { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
     db().from("sync_state").select("updated_at").eq("key", "races_scan").maybeSingle(),
+    // Resolution recency: the finish time of the newest race we have RESOLVED.
+    // This tracks resolution, not discovery, so the "Synced" label cannot read
+    // fresh while results are stale.
+    db().from("races").select("resolved_at").eq("resolved", true).order("resolved_at", { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
   ]);
 
   let topName: string | null = null;
@@ -730,6 +734,7 @@ export async function getSiteStats(): Promise<SiteStats> {
     ethUsd: price.data ? Number(price.data.usd) : null,
     petsSyncedAt: (freshPet.data?.last_synced_at as string) ?? null,
     racesScannedAt: (raceScan.data?.updated_at as string) ?? null,
+    lastResolvedAt: (lastResolved.data?.resolved_at as string) ?? null,
     meta: { source: SOURCE },
   };
 }

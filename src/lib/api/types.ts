@@ -279,7 +279,8 @@ export interface SiteStats {
   topConfirmed: { petId: number; name: string | null; confirmedQuality: number } | null;
   ethUsd: number | null;
   petsSyncedAt: string | null;
-  racesScannedAt: string | null;
+  racesScannedAt: string | null; // when discovery last ran (NOT resolution recency)
+  lastResolvedAt: string | null; // finish time of the newest resolved race we hold
   meta: { source: string };
 }
 
