@@ -327,6 +327,21 @@ async function topConfirmedIds(n: number): Promise<Set<number>> {
   return new Set((data ?? []).map((r) => r.pet_id as number));
 }
 
+// Build the marked horse's fit map (keys 500/1200/2400/3000) for the verdict's
+// distance-fit assessment. Returns undefined if any fit column is missing, so the
+// verdict simply emits no fit badge rather than acting on partial data.
+function markedFitMap(score: Record<string, unknown> | undefined): Record<number, number> | undefined {
+  if (!score) return undefined;
+  const cols: [number, string][] = [[500, "fit_500"], [1200, "fit_1200"], [2400, "fit_2400"], [3000, "fit_3000"]];
+  const m: Record<number, number> = {};
+  for (const [track, col] of cols) {
+    const v = score[col];
+    if (v == null || !Number.isFinite(Number(v))) return undefined;
+    m[track] = Number(v);
+  }
+  return m;
+}
+
 // ---- Race detail + verdict --------------------------------------------------
 export async function getRaceDetail(id: number, markedPetId?: number): Promise<RaceDetail | null> {
   const { data: race, error } = await db().from("races").select("*").eq("race_id", id).maybeSingle();
@@ -343,7 +358,7 @@ export async function getRaceDetail(id: number, markedPetId?: number): Promise<R
   const [{ data: pets }, { data: traits }, { data: scores }, threshold] = await Promise.all([
     db().from("pets").select("id, name, owner_address, wins, races_run, elo").in("id", petIds.length ? petIds : [-1]),
     db().from("pet_traits").select("pet_id, trait_id, trait_name, tier").in("pet_id", petIds.length ? petIds : [-1]),
-    db().from("pet_scores").select("pet_id, best_distance, reveal_progress").in("pet_id", petIds.length ? petIds : [-1]),
+    db().from("pet_scores").select("pet_id, best_distance, reveal_progress, fit_500, fit_1200, fit_2400, fit_3000").in("pet_id", petIds.length ? petIds : [-1]),
     eloThreshold(),
   ]);
 
@@ -387,6 +402,7 @@ export async function getRaceDetail(id: number, markedPetId?: number): Promise<R
     eloThreshold: threshold,
     markedPetId,
     trackLength: race.track_length,
+    markedFit: markedPetId != null ? markedFitMap(scoreById.get(markedPetId) as Record<string, unknown> | undefined) : undefined,
   });
 
   return {
@@ -732,7 +748,7 @@ export async function getScan(petIds: number[], trackLength: number, markedPetId
   const [{ data: pets }, { data: traits }, { data: scores }, threshold] = await Promise.all([
     db().from("pets").select("id, name, owner_address, wins, races_run, elo").in("id", ids),
     db().from("pet_traits").select("pet_id, trait_id, trait_name, tier").in("pet_id", ids),
-    db().from("pet_scores").select("pet_id, best_distance, reveal_progress").in("pet_id", ids),
+    db().from("pet_scores").select("pet_id, best_distance, reveal_progress, fit_500, fit_1200, fit_2400, fit_3000").in("pet_id", ids),
     eloThreshold(),
   ]);
   const petById = new Map((pets ?? []).map((p) => [p.id, p]));
@@ -773,7 +789,13 @@ export async function getScan(petIds: number[], trackLength: number, markedPetId
 
   // A live lobby has no announced payout, so the payout-trap signal is not
   // assessable; the verdict leans on sharks, in-form horses, and your fit.
-  const verdict = computeVerdict(entrants, { payoutBps: null, eloThreshold: threshold, markedPetId, trackLength });
+  const verdict = computeVerdict(entrants, {
+    payoutBps: null,
+    eloThreshold: threshold,
+    markedPetId,
+    trackLength,
+    markedFit: markedPetId != null ? markedFitMap(scoreById.get(markedPetId) as Record<string, unknown> | undefined) : undefined,
+  });
 
   return {
     raceId: 0,

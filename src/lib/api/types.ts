@@ -145,7 +145,7 @@ export interface WalletSummary {
 export type Recommendation = "PASS" | "ENTERABLE" | "CAUTION";
 
 export interface VerdictBadge {
-  kind: "shark" | "payout-trap" | "your-fit" | "high-elo" | "soft-field";
+  kind: "shark" | "payout-trap" | "your-fit" | "high-elo" | "soft-field" | "poor-fit" | "off-best-fit";
   petId?: number;
   label: string;
 }

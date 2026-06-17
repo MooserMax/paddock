@@ -48,6 +48,10 @@ const BADGE_COLOR: Record<string, string> = {
   "your-fit": "var(--cyan)",
   "high-elo": "var(--glow)",
   "soft-field": "var(--green)",
+  // Fit signals: caution (gold, the same family as the "what cannot be known"
+  // note) and a muted secondary, never the red shark style. A heads-up, not a stop.
+  "poor-fit": "var(--gold)",
+  "off-best-fit": "var(--ink-soft)",
 };
 
 function Badge({ kind, label }: { kind: string; label: string }) {

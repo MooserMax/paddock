@@ -1,5 +1,19 @@
 import { shrunkWinRate } from "./engine";
+import { TRACK_LENGTHS } from "./constants";
 import type { RaceEntrantDTO, VerdictDTO, VerdictBadge } from "../api/types";
+
+// Distance-fit thresholds, set from the Phase 1 out-of-sample study
+// (scripts/study-distance-fit.mts). Fit is validated as directional but modest:
+// the within-horse, quality-controlled (leave-one-out demeaned) finish penalty,
+// bucketed by fit-points below the horse's own best, runs:
+//   < 3 pts:  negative (no harm)            -> no badge (co-best / noise)
+//   3 to 15:  ~0 to +0.004 (modest)         -> off-best, soft note
+//   >= 15:    +0.009 plateau (material)     -> weak, caution
+// The absolute point gap is the cleaner predictor; the spread ratio is the guard
+// so a high-spread horse is not flagged for a proportionally minor gap.
+export const FIT_COBEST_GAP_PTS = 3.0; // below this, penalty is negative: no badge
+export const FIT_WEAK_GAP_PTS = 15.0; // material penalty begins here (+0.009 at [15,20))
+export const FIT_WEAK_RATIO = 0.5; // gap must be >= half the horse's own fit spread
 
 // The scanner's verdict logic. It does not show data, it gives a call. Field
 // quality is read from history; what it cannot know (real-time reveal state and
@@ -25,6 +39,7 @@ export interface VerdictContext {
   eloThreshold: number; // 90th percentile of the live ELO ladder, computed upstream
   markedPetId?: number; // "your horse" for the YOUR FIT call
   trackLength: number | null;
+  markedFit?: Record<number, number>; // marked horse's fit map (keys 500/1200/2400/3000)
 }
 
 // A race pays "top-2 only" when at most two finishing positions are rewarded.
@@ -56,20 +71,38 @@ export function computeVerdict(
     badges.unshift({ kind: "payout-trap", label: "Payout trap, top 2 only" });
   }
 
-  let yourFit: boolean | null = null;
-  if (ctx.markedPetId != null) {
-    const mine = entrants.find((e) => e.petId === ctx.markedPetId);
-    if (mine) {
-      yourFit = mine.bestDistance === ctx.trackLength;
-      badges.push({
-        kind: "your-fit",
-        petId: mine.petId,
-        label: yourFit
-          ? `Your horse fits ${ctx.trackLength}m`
-          : `Your horse prefers ${mine.bestDistance}m`,
-      });
+  // Distance-fit assessment for the marked horse. "Off its own best" and "weak
+  // at this distance" are different claims, so they are separate states using
+  // BOTH the absolute fit-point gap (the cleaner Phase 1 predictor) and the
+  // spread-normalized ratio (the guard). Co-best / within noise stays silent so a
+  // weak-magnitude signal never throws a false alarm.
+  type FitState = "fits" | "off-best" | "weak" | null;
+  let fitState: FitState = null;
+  const marked = ctx.markedPetId != null ? entrants.find((e) => e.petId === ctx.markedPetId) : undefined;
+  if (marked && ctx.markedFit && ctx.trackLength != null) {
+    const fitAtTrack = ctx.markedFit[ctx.trackLength];
+    const vals = TRACK_LENGTHS.map((t) => ctx.markedFit![t]).filter((v): v is number => typeof v === "number");
+    if (typeof fitAtTrack === "number" && vals.length > 0) {
+      const bestFit = Math.max(...vals);
+      const spread = bestFit - Math.min(...vals);
+      const gap = bestFit - fitAtTrack;
+      const ratio = spread > 1e-6 ? gap / spread : 0;
+      const best = marked.bestDistance;
+      if (ctx.trackLength === best) {
+        fitState = "fits";
+        badges.push({ kind: "your-fit", petId: marked.petId, label: `Your horse fits ${ctx.trackLength}m` });
+      } else if (gap < FIT_COBEST_GAP_PTS) {
+        fitState = null; // co-best / within noise: no badge
+      } else if (gap >= FIT_WEAK_GAP_PTS && ratio >= FIT_WEAK_RATIO) {
+        fitState = "weak";
+        badges.push({ kind: "poor-fit", petId: marked.petId, label: `Your horse is weak at ${ctx.trackLength}m, well below its ${best}m best` });
+      } else {
+        fitState = "off-best";
+        badges.push({ kind: "off-best-fit", petId: marked.petId, label: `Your horse fits ${ctx.trackLength}m, though ${best}m is its best` });
+      }
     }
   }
+  const fitsTrack = fitState === "fits";
 
   const highEloCount = entrants.filter((e) => e.highElo && !e.isShark).length;
   const softField = sharkPetIds.length === 0 && highEloCount === 0;
@@ -88,22 +121,30 @@ export function computeVerdict(
     recommendation = "CAUTION";
     headline = `Caution. ${sharkPetIds.length} sharks in the field.`;
   } else if (sharkPetIds.length === 1) {
-    recommendation = yourFit ? "ENTERABLE" : "CAUTION";
-    headline = yourFit
+    recommendation = fitsTrack ? "ENTERABLE" : "CAUTION";
+    headline = fitsTrack
       ? "Enterable. One shark, but your horse fits this track."
       : "Caution. One shark to beat.";
   } else if (highEloCount >= 2) {
-    recommendation = yourFit ? "ENTERABLE" : "CAUTION";
-    headline = yourFit
+    recommendation = fitsTrack ? "ENTERABLE" : "CAUTION";
+    headline = fitsTrack
       ? `Enterable. ${highEloCount} high-ELO horses, but yours fits this track.`
       : `Caution. No sharks, but ${highEloCount} high-ELO horses in form.`;
   } else {
     recommendation = "ENTERABLE";
-    headline = yourFit
+    headline = fitsTrack
       ? "Enterable. Soft field and your horse fits."
       : softField
         ? "Enterable. Soft field, no proven threats."
         : "Enterable. One horse in form, the rest beatable.";
+  }
+
+  // Fit is independent of the field call: it adds a caveat to the headline and
+  // never changes the field-driven recommendation. Both findings survive.
+  if (fitState === "weak") {
+    headline = headline.replace(/\.\s*$/, "") + ", but your horse is weak at this distance.";
+  } else if (fitState === "off-best") {
+    headline = headline.replace(/\.\s*$/, "") + ", though this is not your horse's best distance.";
   }
 
   return {

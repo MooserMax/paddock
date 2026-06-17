@@ -18,6 +18,20 @@ const SHARK_TABLE = [
   { t: "0.35", n: 141, wr: "55.3%", lift: "3.71x" },
 ];
 
+// Distance-fit validation (scripts/study-distance-fit.mts), 8,398 resolved races,
+// 55,683 entries. Finish percentile: 0 is first, 1 is last (lower is better).
+const FIT_GRADIENT = [
+  { band: "Lowest fit decile (~24)", pctile: "0.68" },
+  { band: "Middle decile (~50)", pctile: "0.53" },
+  { band: "Highest fit decile (~73)", pctile: "0.38" },
+];
+const FIT_PENALTY = [
+  { gap: "At or near best (< 3)", pen: "-0.007", read: "no harm" },
+  { gap: "5 to 10 below", pen: "+0.004", read: "modest" },
+  { gap: "15 to 20 below", pen: "+0.009", read: "material", current: true },
+  { gap: "20+ below", pen: "+0.009", read: "material" },
+];
+
 export default async function MethodologyPage() {
   let cal: CalibrationResult | null = null;
   let resolvedNow: number | null = null;
@@ -108,6 +122,64 @@ export default async function MethodologyPage() {
 
         <p>
           These two findings are one story. The odds model is overconfident on its favorites: when it says 84%, those horses win about 58%. Its high-confidence picks, averaging a 69% predicted chance, actually win 52%. That is the same number the shark cohort wins, near 50%. Whether you define a strong horse relatively, as the model&apos;s favorite, or absolutely, as a shark, the truth is identical: elite Giglings are strong but beatable, and a naive favorite-take overstates them. The scanner and the odds model show the same reality from two angles.
+        </p>
+      </Section>
+
+      <Section title="Distance fit, validated the same way" eyebrow="Real, but modest, and we say so">
+        <p>
+          Distance fit used to sit in the &quot;what we know&quot; list on assertion alone. It now earns the same out-of-sample table as the shark flag and the odds model, over 8,398 resolved races and 55,683 entries (reproducible from scripts/study-distance-fit.mts). Fit is outcome-independent (it reads only revealed stats and traits, never wins, ELO, or finish), so unlike ELO it cannot leak the result; the relationship even strengthens as a horse&apos;s stats reveal more, which is the signature of a real effect rather than an artifact.
+        </p>
+
+        <div className="my-5 grid gap-4 md:grid-cols-2">
+          <div className="panel p-4">
+            <p className="eyebrow mb-2">Raw gradient: higher fit, better finish</p>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b hairline text-left">
+                  <th className="type-micro pb-1 uppercase text-ink-faint">Fit at the track</th>
+                  <th className="type-micro pb-1 text-right uppercase text-ink-faint">Mean finish pctile</th>
+                </tr>
+              </thead>
+              <tbody>
+                {FIT_GRADIENT.map((r) => (
+                  <tr key={r.band}>
+                    <td className="type-data py-1 text-ink">{r.band}</td>
+                    <td className="type-data py-1 text-right tabular-nums text-ink-soft">{r.pctile}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="type-micro mt-2 normal-case text-ink-faint">
+              Monotonic across all ten deciles, Pearson r is -0.29 over the full set and -0.33 among the most-revealed horses. But most of this is horse quality: good horses carry high fit at every distance and finish well everywhere, so this raw link overstates fit&apos;s own contribution.
+            </p>
+          </div>
+
+          <div className="panel p-4">
+            <p className="eyebrow mb-2">Within-horse, quality-controlled penalty</p>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b hairline text-left">
+                  <th className="type-micro pb-1 uppercase text-ink-faint">Fit pts below own best</th>
+                  <th className="type-micro pb-1 text-right uppercase text-ink-faint">Finish penalty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {FIT_PENALTY.map((r) => (
+                  <tr key={r.gap} style={r.current ? { background: "color-mix(in srgb, var(--gold) 12%, transparent)" } : undefined}>
+                    <td className="type-data py-1 text-ink">{r.gap}{r.current ? " ★" : ""}</td>
+                    <td className="type-data py-1 text-right tabular-nums" style={{ color: r.pen.startsWith("+") ? "var(--gold)" : "var(--green)" }}>{r.pen}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="type-micro mt-2 normal-case text-ink-faint">
+              Each race scored against the same horse&apos;s mean across its other races (leave-one-out), so horse quality is removed and a race never baselines on its own outcome. The honest, isolated effect of distance fit: real and monotonic, but small, roughly a tenth of a finishing position end to end. It firms up (+0.009) at 15 points below best, which is exactly where the scanner&apos;s weak-fit caution begins.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          So the scanner treats fit as a heads-up, not a stop sign. Below 3 points off a horse&apos;s own best is within noise and says nothing. From 3 to 15 points is a quiet &quot;off best&quot; note. Only at 15 points or more below best, and only when that gap is at least half the horse&apos;s own fit spread, does it raise a soft caution. The thresholds are these numbers, not hand-picked examples.
         </p>
       </Section>
 
