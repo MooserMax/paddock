@@ -203,24 +203,49 @@ export async function getWalletSummary(address: string): Promise<WalletSummary> 
   const owner = address.toLowerCase();
   // Separate queries joined in memory: robust and independent of PostgREST
   // foreign-key metadata, and reads only materialized columns.
-  const { data: pets, error } = await db()
-    .from("pets")
-    .select("id, name, img_url, rarity, hatched, elo, races_run")
-    .eq("owner_address", owner)
-    .limit(500);
-  if (error) throw new Error(`wallet pets query failed: ${error.message}`);
+  // The FULL stable, paginated to completion. A wallet's pets must never cap at a
+  // page boundary: petCount, the hatched/total split, stable value, the top-100
+  // flag, the A-team, hidden gems, and the reveal queue are all computed from this
+  // set, so a truncated subset would be a fabricated count.
+  type WalletPetRow = { id: number; name: string | null; img_url: string | null; rarity: number | null; hatched: boolean; elo: number | null; races_run: number | null };
+  const pets: WalletPetRow[] = [];
+  {
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await db()
+        .from("pets")
+        .select("id, name, img_url, rarity, hatched, elo, races_run")
+        .eq("owner_address", owner)
+        .order("id", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(`wallet pets query failed: ${error.message}`);
+      if (!data || data.length === 0) break;
+      pets.push(...(data as WalletPetRow[]));
+      if (data.length < PAGE) break;
+    }
+  }
 
-  const ids = (pets ?? []).map((p) => p.id as number);
-  const { data: scoreRows, error: scoreErr } = await db()
-    .from("pet_scores")
-    .select(
-      "pet_id, confirmed_quality, upside, best_distance, reveal_progress, next_milestone_in, fit_500, fit_1200, fit_2400, fit_3000, valuation_low_eth, valuation_high_eth, valuation_comps"
-    )
-    .in("pet_id", ids.length ? ids : [-1]);
-  if (scoreErr) throw new Error(`wallet scores query failed: ${scoreErr.message}`);
-  const scoreByPet = new Map((scoreRows ?? []).map((s) => [s.pet_id as number, s]));
+  const ids = pets.map((p) => p.id);
+  // Scores joined in <=1000-id chunks so this side never caps at the row ceiling either.
+  type WalletScoreRow = {
+    pet_id: number; confirmed_quality: number | null; upside: number | null; best_distance: number | null;
+    reveal_progress: number | null; next_milestone_in: number | null; fit_500: number | null; fit_1200: number | null;
+    fit_2400: number | null; fit_3000: number | null; valuation_low_eth: number | null; valuation_high_eth: number | null;
+    valuation_comps: { thin?: boolean; comps?: unknown[] } | null;
+  };
+  const scoreByPet = new Map<number, WalletScoreRow>();
+  for (let i = 0; i < ids.length; i += 1000) {
+    const { data, error: scoreErr } = await db()
+      .from("pet_scores")
+      .select(
+        "pet_id, confirmed_quality, upside, best_distance, reveal_progress, next_milestone_in, fit_500, fit_1200, fit_2400, fit_3000, valuation_low_eth, valuation_high_eth, valuation_comps"
+      )
+      .in("pet_id", ids.slice(i, i + 1000));
+    if (scoreErr) throw new Error(`wallet scores query failed: ${scoreErr.message}`);
+    for (const s of data ?? []) scoreByPet.set(s.pet_id as number, s as WalletScoreRow);
+  }
 
-  const rows: OwnedRow[] = (pets ?? []).map((p) => {
+  const rows: OwnedRow[] = pets.map((p) => {
     const s = scoreByPet.get(p.id as number);
     return {
       id: p.id,
@@ -562,16 +587,27 @@ export async function getLeaderboard(
   }
 
   if (metric === "winrate") {
-    // Min-races threshold keeps the board meaningful; rank by shrunk rate over a
-    // bounded high-win candidate set, then paginate.
-    const { data } = await db()
-      .from("pets")
-      .select(PET_BASE_COLS)
-      .gte("races_run", cfg.minRaces ?? 5)
-      .order("wins", { ascending: false })
-      .limit(800);
-    const ranked = (data ?? [])
-      .map((p) => ({ p: p as PetBaseRow, shrunk: entrantShrunkWinRate(Number(p.wins ?? 0), Number(p.races_run ?? 0)) }))
+    // Rank shrunk win rate over the FULL eligible population (>= minRaces),
+    // paginated to completion. A top-by-raw-wins candidate cap would silently drop
+    // high-rate, moderate-win horses (e.g. 6 of 10) from the board entirely.
+    const eligible: PetBaseRow[] = [];
+    {
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await db()
+          .from("pets")
+          .select(PET_BASE_COLS)
+          .gte("races_run", cfg.minRaces ?? 5)
+          .order("id", { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) throw new Error(`winrate eligible query failed: ${error.message}`);
+        if (!data || data.length === 0) break;
+        eligible.push(...(data as PetBaseRow[]));
+        if (data.length < PAGE) break;
+      }
+    }
+    const ranked = eligible
+      .map((p) => ({ p, shrunk: entrantShrunkWinRate(Number(p.wins ?? 0), Number(p.races_run ?? 0)) }))
       .sort((a, b) => b.shrunk - a.shrunk);
     const page = ranked.slice(offset, offset + limit);
     const scores = await scoresByIds(page.map((x) => x.p.id));

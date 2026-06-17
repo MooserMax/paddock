@@ -127,7 +127,7 @@ export default async function MethodologyPage() {
 
       <Section title="Distance fit, validated the same way" eyebrow="Real, but modest, and we say so">
         <p>
-          Distance fit used to sit in the &quot;what we know&quot; list on assertion alone. It now earns the same out-of-sample table as the shark flag and the odds model, over 8,398 resolved races and 55,683 entries (reproducible from scripts/study-distance-fit.mts). Fit is outcome-independent (it reads only revealed stats and traits, never wins, ELO, or finish), so unlike ELO it cannot leak the result; the relationship even strengthens as a horse&apos;s stats reveal more, which is the signature of a real effect rather than an artifact.
+          Distance fit used to sit in the &quot;what we know&quot; list on assertion alone. It now earns the same out-of-sample table as the shark flag and the odds model, over 8,398 resolved races and 55,683 entries, reproducible from scripts/study-distance-fit.mts. (That 8,398 is a later frozen snapshot than the scoring study&apos;s 4,537 above: both are audit snapshots taken when each study was run, not live counts, which is why the current total, now past {resolvedNow ? resolvedNow.toLocaleString("en-US") : "9,000"}, is higher than either.) Fit is outcome-independent (it reads only revealed stats and traits, never wins, ELO, or finish), so unlike ELO it cannot leak the result; the relationship even strengthens as a horse&apos;s stats reveal more, which is the signature of a real effect rather than an artifact.
         </p>
 
         <div className="my-5 grid gap-4 md:grid-cols-2">
