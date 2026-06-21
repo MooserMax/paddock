@@ -123,6 +123,22 @@ export interface RevealQueueItem {
   revealPct: number;
 }
 
+// Stable Skill: shrunk average confirmed quality of a stable's proven horses.
+// Measures proven roster quality, not racing skill, not value. state "ranked"
+// has a percentile and rank; "limited" (1-2 proven) has a score but no rank;
+// "none" (0 proven) has no score, never fabricated.
+export interface StableSkill {
+  state: "ranked" | "limited" | "none";
+  score: number | null;
+  percentile: number | null; // 0..1, rank / eligibleTotal
+  rank: number | null;
+  provenCount: number;
+  totalHorses: number;
+  avgProvenCq: number | null;
+  eligibleTotal: number; // number of ranked stables, the percentile denominator
+  topPetId: number | null; // highest-cq proven horse, the share-card anchor
+}
+
 export interface WalletSummary {
   address: string;
   name: string | null;
@@ -134,12 +150,32 @@ export interface WalletSummary {
     estimated: true;
     compCountTotal: number;
   };
+  skill: StableSkill;
   aTeam: PetCardDTO[];
   hiddenGems: PetCardDTO[];
   revealQueue: RevealQueueItem[];
   trackAssignments: { distance: number; petId: number | null; name: string | null; fit: number }[];
   flags: string[];
   meta: { source: string; refreshing: boolean };
+}
+
+export interface StableRow {
+  rank: number;
+  ownerAddress: string;
+  ownerName: string | null;
+  score: number;
+  percentile: number; // 0..1
+  provenCount: number;
+  totalHorses: number;
+  avgProvenCq: number;
+}
+
+export interface StableLeaderboardResponse {
+  rows: StableRow[];
+  limit: number;
+  offset: number;
+  total: number;
+  meta: { source: string; explanation: string; popMean: number; k: number; computedAt: string | null };
 }
 
 export type Recommendation = "PASS" | "ENTERABLE" | "CAUTION";

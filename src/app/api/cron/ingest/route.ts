@@ -4,6 +4,7 @@ import { syncEthPrice } from "@/lib/ingest/ethPrice";
 import { catchUpRaces, hydrateRaces } from "@/lib/ingest/races";
 import { rollingPetSync } from "@/lib/ingest/pets";
 import { materializeScoresFor } from "@/lib/ingest/scores";
+import { materializeStableSkill } from "@/lib/ingest/stableSkill";
 import { syncAccounts } from "@/lib/ingest/accounts";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
@@ -116,6 +117,19 @@ export async function GET(req: NextRequest) {
       steps.scores = scored;
     } else if (pets.ids.length) {
       steps.scoresSkipped = "soft deadline";
+    }
+
+    // 3b. Recompute the stable skill board (full-population aggregate over the
+    //     current pet_scores; recomputes POP_MEAN and re-derives K each run). A
+    //     few seconds; gated on the soft deadline like the rest.
+    if (timeLeft()) {
+      try {
+        steps.stableSkill = await materializeStableSkill();
+      } catch (e) {
+        steps.stableSkillError = msg(e);
+      }
+    } else {
+      steps.stableSkillSkipped = "soft deadline";
     }
 
     // 4. Resolve Gigaverse usernames for a small slice of displayed owners, in

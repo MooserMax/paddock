@@ -4,6 +4,7 @@ import { api, ApiClientError } from "@/lib/api/client";
 import type { WalletSummary } from "@/lib/api/types";
 import PetCard from "@/components/PetCard";
 import Panel from "@/components/ui/Panel";
+import StableSkillCard from "@/components/stable/StableSkillCard";
 import WalletSearch from "@/components/WalletSearch";
 import { TRACK_LABEL } from "@/lib/display";
 import { formatEth, formatInt, formatScore, shortAddress, ownerDisplay } from "@/lib/format";
@@ -79,8 +80,13 @@ export default async function WalletPage({ params }: PageProps) {
         </Panel>
       ) : (
         <>
+          {/* Stable skill: the competitive hook, above the value/flags cards */}
+          <div className="mt-8">
+            <StableSkillCard skill={summary.skill} />
+          </div>
+
           {/* Stable value + flags: the above-the-fold headline on mobile */}
-          <div className="assemble mt-8 grid gap-4 lg:grid-cols-[1.4fr_1fr]" style={{ animationDelay: "40ms" }}>
+          <div className="assemble mt-6 grid gap-4 lg:grid-cols-[1.4fr_1fr]" style={{ animationDelay: "40ms" }}>
             <Panel eyebrow="Estimated stable value" title="" note="Band-based, summed from comparable-sales valuations. An estimate, not a quote.">
               {stableValue.lowEth !== null ? (
                 <div>

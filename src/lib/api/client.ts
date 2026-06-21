@@ -6,6 +6,7 @@ import type {
   OddsResponse,
   LeaderboardResponse,
   LeaderboardMetric,
+  StableLeaderboardResponse,
   SiteStats,
   RaceListResponse,
   CalibrationResult,
@@ -73,6 +74,8 @@ export const api = {
   odds: (id: number | string, o?: FetchOpts) => apiGet<OddsResponse>(`/odds/race/${id}`, o ?? { revalidate: 120 }),
   leaderboard: (metric: LeaderboardMetric, limit = 25, offset = 0, o?: FetchOpts) =>
     apiGet<LeaderboardResponse>(`/leaderboard?metric=${metric}&limit=${limit}&offset=${offset}`, o ?? { revalidate: 120 }),
+  stables: (limit = 25, offset = 0, o?: FetchOpts) =>
+    apiGet<StableLeaderboardResponse>(`/stables?limit=${limit}&offset=${offset}`, o ?? { revalidate: 120 }),
   stats: (o?: FetchOpts) => apiGet<SiteStats>(`/stats`, o ?? { revalidate: 60 }),
   races: (track?: number | null, limit = 24, offset = 0, o?: FetchOpts) =>
     apiGet<RaceListResponse>(`/races?limit=${limit}&offset=${offset}${track ? `&track=${track}` : ""}`, o ?? { revalidate: 30 }),

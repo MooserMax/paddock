@@ -323,6 +323,13 @@ export async function getWalletSummary(address: string): Promise<WalletSummary> 
   const gigaCount = rows.filter((r) => r.rarity === 6).length;
   if (gigaCount > 0) flags.push(`Holds ${gigaCount} Giga${gigaCount === 1 ? "" : "s"}.`);
 
+  const skill = await getStableSkill(owner);
+  // A natural, on-brand flag for high rankers, in the existing flags style. Rank-
+  // based so it matches the displayed bracket (rank 2 of 197 shows "top 1.0%").
+  if (skill.state === "ranked" && skill.rank != null && skill.rank <= Math.ceil(skill.eligibleTotal * 0.01)) {
+    flags.unshift("Top 1% of stables by proven roster quality.");
+  }
+
   return {
     address: owner,
     name: await lookupUsername(owner),
@@ -334,6 +341,7 @@ export async function getWalletSummary(address: string): Promise<WalletSummary> 
       estimated: true,
       compCountTotal,
     },
+    skill,
     aTeam,
     hiddenGems,
     revealQueue,
@@ -941,4 +949,71 @@ export async function getCalibration(): Promise<CalibrationResult | null> {
   if (!data?.value) return null;
   const v = data.value as Omit<CalibrationResult, "generatedAt" | "meta">;
   return { ...v, generatedAt: (data.updated_at as string) ?? null, meta: { source: SOURCE } };
+}
+
+// ---- Stable skill (precomputed in the cron, read-only) ----------------------
+import type { StableSkill, StableRow, StableLeaderboardResponse } from "./types";
+import type { StableSkillBlob } from "../ingest/stableSkill";
+
+const STABLE_EXPLANATION =
+  "Stable skill: the shrunk average confirmed quality of each stable's proven horses. Proven roster quality, not racing skill, not value. Thin rosters are pulled toward the population mean; stables need at least 3 proven horses to rank.";
+
+// The precomputed blob, read once per request and reused. A missing blob (job has
+// not run yet, or the row is absent) degrades to "none"/empty, never an error.
+async function stableSkillBlob(): Promise<{ blob: StableSkillBlob; computedAt: string | null } | null> {
+  const { data, error } = await db().from("sync_state").select("value, updated_at").eq("key", "stable_skill_v1").maybeSingle();
+  if (error || !data?.value) return null;
+  return { blob: data.value as StableSkillBlob, computedAt: (data.updated_at as string) ?? null };
+}
+
+// One stable's skill, by address. ranked (>=3 proven, has rank + percentile),
+// limited (1-2 proven, scored but unranked), or none (0 proven, never fabricated).
+export async function getStableSkill(address: string): Promise<StableSkill> {
+  const owner = address.toLowerCase();
+  const none: StableSkill = { state: "none", score: null, percentile: null, rank: null, provenCount: 0, totalHorses: 0, avgProvenCq: null, eligibleTotal: 0, topPetId: null };
+  const wrap = await stableSkillBlob();
+  if (!wrap) return none;
+  const { blob } = wrap;
+  const idx = blob.board.findIndex((b) => b.address === owner);
+  if (idx >= 0) {
+    const b = blob.board[idx];
+    return {
+      state: "ranked",
+      score: b.score,
+      percentile: blob.eligibleTotal ? (idx + 1) / blob.eligibleTotal : null,
+      rank: idx + 1,
+      provenCount: b.provenCount,
+      totalHorses: b.totalHorses,
+      avgProvenCq: b.avgProvenCq,
+      eligibleTotal: blob.eligibleTotal,
+      topPetId: b.topPetId,
+    };
+  }
+  const lim = blob.limited[owner];
+  if (lim) {
+    return { state: "limited", score: lim.score, percentile: null, rank: null, provenCount: lim.provenCount, totalHorses: lim.totalHorses, avgProvenCq: lim.avgProvenCq, eligibleTotal: blob.eligibleTotal, topPetId: lim.topPetId };
+  }
+  return { ...none, eligibleTotal: blob.eligibleTotal };
+}
+
+// The public stable board: eligible stables (>=3 proven) ranked by score, with
+// owner usernames resolved at read time, exactly like the pet leaderboards.
+export async function getStableLeaderboard(limit: number, offset: number): Promise<StableLeaderboardResponse> {
+  const wrap = await stableSkillBlob();
+  const empty: StableLeaderboardResponse = { rows: [], limit, offset, total: 0, meta: { source: SOURCE, explanation: STABLE_EXPLANATION, popMean: 0, k: 0, computedAt: null } };
+  if (!wrap) return empty;
+  const { blob, computedAt } = wrap;
+  const page = blob.board.slice(offset, offset + limit);
+  const names = await lookupUsernames(page.map((b) => b.address));
+  const rows: StableRow[] = page.map((b, i) => ({
+    rank: offset + i + 1,
+    ownerAddress: b.address,
+    ownerName: names.get(b.address.toLowerCase()) ?? null,
+    score: b.score,
+    percentile: blob.eligibleTotal ? (offset + i + 1) / blob.eligibleTotal : 0,
+    provenCount: b.provenCount,
+    totalHorses: b.totalHorses,
+    avgProvenCq: b.avgProvenCq,
+  }));
+  return { rows, limit, offset, total: blob.eligibleTotal, meta: { source: SOURCE, explanation: STABLE_EXPLANATION, popMean: blob.popMean, k: blob.k, computedAt } };
 }

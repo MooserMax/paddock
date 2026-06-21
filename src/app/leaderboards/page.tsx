@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { api } from "@/lib/api/client";
 import type { LeaderboardMetric, LeaderboardResponse } from "@/lib/api/types";
 import LeaderboardTable from "@/components/leaderboards/LeaderboardTable";
+import LeaderboardTabs from "@/components/leaderboards/LeaderboardTabs";
 
 export const metadata: Metadata = {
   title: "Leaderboards",
@@ -38,19 +39,7 @@ export default async function LeaderboardsPage({ searchParams }: { searchParams:
         <h1 className="type-page-title mt-2 text-ink">Leaderboards</h1>
       </header>
 
-      <nav className="mb-4 flex flex-wrap gap-2" aria-label="Leaderboard metric">
-        {METRICS.map((m) => (
-          <Link
-            key={m.key}
-            href={`/leaderboards?metric=${m.key}`}
-            aria-current={metric === m.key ? "true" : undefined}
-            className="transition-paddock rounded-full border px-3.5 py-1.5"
-            style={metric === m.key ? { borderColor: "var(--glow)" } : { borderColor: "var(--line)" }}
-          >
-            <span className={`type-micro uppercase tracking-wider ${metric === m.key ? "text-ink" : "text-ink-faint"}`}>{m.label}</span>
-          </Link>
-        ))}
-      </nav>
+      <LeaderboardTabs active={metric} />
 
       {board && <p className="type-micro mb-4 max-w-2xl normal-case leading-relaxed text-ink-faint">{board.meta.explanation}</p>}
 

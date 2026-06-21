@@ -36,6 +36,14 @@ export function formatInt(value: number | null | undefined): string {
   return Math.round(value).toLocaleString("en-US");
 }
 
+// A stable's competitive position as "Top X%". One decimal below 10%, whole at
+// or above, so "Top 0.5%" and "Top 47%" both read cleanly.
+export function formatPercentile(fraction: number | null | undefined): string {
+  if (fraction === null || fraction === undefined || !Number.isFinite(fraction)) return "unranked";
+  const pct = fraction * 100;
+  return `Top ${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
+}
+
 export function formatScore(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "unknown";
   return value.toFixed(1);

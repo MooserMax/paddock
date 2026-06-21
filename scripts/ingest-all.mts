@@ -10,6 +10,7 @@ import { scanRaces, catchUpRaces, hydrateRaces } from "../src/lib/ingest/races";
 import { rollingPetSync } from "../src/lib/ingest/pets";
 import { syncSales } from "../src/lib/ingest/sales";
 import { materializeScores } from "../src/lib/ingest/scores";
+import { materializeStableSkill } from "../src/lib/ingest/stableSkill";
 import { runCalibration } from "../src/lib/ingest/calibration";
 import { syncAccounts } from "../src/lib/ingest/accounts";
 
@@ -28,11 +29,12 @@ async function run(name: string, fn: () => Promise<unknown>) {
 await run("eth-price", () => syncEthPrice());
 await run("races-scan", () => scanRaces(60_000));
 await run("races-catchup", () => catchUpRaces(5000));
-await run("abandon-shells", () => abandonStaleShells(250));
-await run("races-hydrate", () => hydrateRaces(1000));
+// hydrate resolves newest-first and abandons confirmed-dead shells past the lag.
+await run("races-hydrate", () => hydrateRaces(1000, undefined, undefined, 250));
 await run("pets", () => rollingPetSync({ maxPets: 800 }));
 await run("sales", () => syncSales());
 await run("scores", () => materializeScores());
+await run("stable-skill", () => materializeStableSkill());
 await run("calibration", () => runCalibration());
 // No duration cap here, so backfill every displayed owner (all four boards,
 // including top earners) in one pass.
