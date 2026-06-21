@@ -29,7 +29,7 @@ export default async function Home() {
         <div className="mx-auto max-w-page px-4 py-16 md:px-6 md:py-24">
           <p className="eyebrow assemble">The open intelligence layer for Gigling Racing</p>
           <h1 className="type-page-title assemble mt-3 max-w-3xl text-balance text-ink" style={{ animationDelay: "40ms" }}>
-            One verified engine. Every Gigling, graded. <span className="asterisk">Never a fabricated number.</span>
+            Every Gigling, graded. <span className="asterisk">Know your stable. Know your odds.</span>
           </h1>
           <p className="type-body assemble mt-4 max-w-xl text-ink-soft" style={{ animationDelay: "80ms" }}>
             Paste a wallet and read its stable like a scout: proven quality, hidden upside, which horse to race next, and what it is worth. Powered by a public API anyone can build on.
