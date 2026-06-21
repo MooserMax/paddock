@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { StableRow } from "@/lib/api/types";
 import OwnerLabel from "@/components/OwnerLabel";
-import { formatPercentile, formatScore, formatInt } from "@/lib/format";
+import { stableStanding, formatScore, formatInt } from "@/lib/format";
 
 // The stable board, same windowed pattern as the pet leaderboards: 25 rows
 // initially, expand 25 at a time, instant (rows already in hand). Percentile is
@@ -23,7 +23,7 @@ export default function StableLeaderboardTable({ rows, total }: { rows: StableRo
         <div className="hidden grid-cols-[2.5rem_1fr_7rem_5rem_9rem] gap-3 border-b hairline-strong px-4 py-2.5 md:grid">
           <span className="type-micro uppercase text-ink-faint">#</span>
           <span className="type-micro uppercase text-ink-faint">Stable</span>
-          <span className="type-micro uppercase text-ink-faint">Percentile</span>
+          <span className="type-micro uppercase text-ink-faint">Standing</span>
           <span className="type-micro text-right uppercase text-ink-faint">Score</span>
           <span className="type-micro text-right uppercase text-ink-faint">Proven · total</span>
         </div>
@@ -39,7 +39,7 @@ export default function StableLeaderboardTable({ rows, total }: { rows: StableRo
               name={r.ownerName}
               className="type-data min-w-0 truncate text-ink transition-paddock hover:text-glow"
             />
-            <span className="type-data tabular-nums" style={{ color: "var(--glow)" }}>{formatPercentile(r.percentile)}</span>
+            <span className="type-data tabular-nums" style={{ color: "var(--glow)" }}>{stableStanding(r.percentile, r.rank, total)}</span>
             <span className="type-data hidden text-right tabular-nums text-ink-soft md:block">{formatScore(r.score)}</span>
             <span className="type-data text-right tabular-nums text-ink-faint">
               {formatInt(r.provenCount)}<span className="text-ink-faint"> · {formatInt(r.totalHorses)}</span>

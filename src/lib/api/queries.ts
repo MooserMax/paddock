@@ -301,19 +301,43 @@ export async function getWalletSummary(address: string): Promise<WalletSummary> 
     return { distance, petId: best?.id ?? null, name: best?.name ?? null, fit: best ? Number(best[key]) : 0 };
   });
 
-  let low = 0;
-  let high = 0;
+  // Combine per-horse comp bands into a stable band. The midpoint is the sum of
+  // per-horse midpoints. The band combines per-horse half-widths in QUADRATURE
+  // with a correlation factor, NOT linearly: summing lows-to-lows and highs-to-
+  // highs falsely assumes every horse lands at its 25th (or 75th) percentile at
+  // once, which has near-zero probability and massively overstates the band.
+  // rho is the average pairwise correlation of horse values, the share that moves
+  // together with ETH and collection demand. Measured at 0.016 over the available
+  // (short, near-flat) sales window, which understates realization-horizon co-
+  // movement; we adopt 0.15, within the 15 to 30 percent single-factor share
+  // typical of NFT-collection assets, retaining a real systematic component while
+  // correcting the linear overstatement. See scripts/measure-value-correlation.mts.
+  const VALUE_RHO = 0.15;
+  const VALUE_SANITY_FLOOR = 0.02; // never tighter than +-2% of the midpoint
+  let mid = 0;
+  let sumHalf = 0; // linear sum of half-widths
+  let sumHalfSq = 0; // sum of squared half-widths
   let compCountTotal = 0;
   let anyBand = false;
   for (const r of rows) {
     const comps = r.valuation_comps;
     if (r.valuation_low_eth !== null && r.valuation_high_eth !== null && comps && comps.thin === false) {
-      low += Number(r.valuation_low_eth);
-      high += Number(r.valuation_high_eth);
+      const lo = Number(r.valuation_low_eth);
+      const hi = Number(r.valuation_high_eth);
+      mid += (lo + hi) / 2;
+      const half = (hi - lo) / 2;
+      sumHalf += half;
+      sumHalfSq += half * half;
       compCountTotal += Array.isArray(comps.comps) ? comps.comps.length : 0;
       anyBand = true;
     }
   }
+  const combinedHalf = Math.max(
+    VALUE_SANITY_FLOOR * mid,
+    Math.sqrt((1 - VALUE_RHO) * sumHalfSq + VALUE_RHO * sumHalf * sumHalf)
+  );
+  const low = mid - combinedHalf;
+  const high = mid + combinedHalf;
 
   const flags: string[] = [];
   if (rows.length > 0 && hatched.length === 0) flags.push("This stable is all potential. Nothing hatched yet.");

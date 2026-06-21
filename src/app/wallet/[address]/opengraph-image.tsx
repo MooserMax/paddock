@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 import { getWalletSummary } from "@/lib/api/queries";
-import { ownerDisplay, formatPercentile } from "@/lib/format";
+import { ownerDisplay, stableStanding } from "@/lib/format";
 import { OG_SIZE, OG_COLORS, ogBackground, ogFonts } from "@/lib/og";
 
 export const runtime = "nodejs";
@@ -10,8 +10,6 @@ export const alt = "Paddock stable grade";
 // Cached: the card changes only when the underlying stable data refreshes, so it
 // is not regenerated per request.
 export const revalidate = 300;
-
-const SHARE_URL = "paddock-scott-s-projects5.vercel.app";
 
 // Fetch the horse art and inline it as a data URL, so a failed image never leaves
 // a broken-image icon on a shareable asset (the card simply omits the art).
@@ -48,18 +46,21 @@ export default async function Image({ params }: { params: { address: string } })
   const topHorse = (skill?.topPetId != null ? s?.aTeam.find((p) => p.id === skill.topPetId) : null) ?? s?.aTeam[0] ?? null;
   const horseArt = await imageDataUrl(topHorse?.imgUrl);
 
-  // Hero figure: the percentile when ranked, else honest holdings.
-  const heroValue = ranked ? formatPercentile(skill!.percentile).toUpperCase() : `${s?.petCount ?? 0}`;
+  // Hero figure: the standing when ranked (Top X% near the top, else Rank n of
+  // total, never Top 100%), honest holdings otherwise. Font shrinks for the longer
+  // "RANK n OF total" form so it never overflows.
+  const heroValue = ranked ? stableStanding(skill!.percentile, skill!.rank, skill!.eligibleTotal).toUpperCase() : `${s?.petCount ?? 0}`;
+  const heroSize = heroValue.length > 9 ? 78 : 144;
   const heroLabel = ranked
-    ? `of ${skill!.eligibleTotal} stables by proven roster quality`
+    ? "by proven roster quality"
     : limited
       ? `Giglings held. ${skill!.provenCount} proven, reveal 3 or more for your stable grade`
       : "Giglings held. Reveal horses to earn your stable grade";
 
   const valueText =
     s && s.stableValue.lowEth !== null
-      ? `est. ${s.stableValue.lowEth.toFixed(2)} to ${s.stableValue.highEth!.toFixed(2)} ETH`
-      : "est. value, comps thin";
+      ? `VALUE est. ${s.stableValue.lowEth.toFixed(2)} to ${s.stableValue.highEth!.toFixed(2)} ETH`
+      : "VALUE est. comps thin";
 
   return new ImageResponse(
     (
@@ -79,18 +80,19 @@ export default async function Image({ params }: { params: { address: string } })
         <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "space-between", gap: 40 }}>
           <div style={{ display: "flex", flexDirection: "column", maxWidth: 680 }}>
             <span style={{ fontFamily: "JetBrains Mono", fontSize: 30, color: OG_COLORS.inkSoft }}>{name}</span>
-            <span style={{ fontSize: ranked ? 150 : 120, lineHeight: 1, color: OG_COLORS.glow, marginTop: 6 }}>{heroValue}</span>
+            <span style={{ fontSize: heroSize, lineHeight: 1, color: OG_COLORS.glow, marginTop: 6 }}>{heroValue}</span>
             <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkFaint, marginTop: 10, maxWidth: 620 }}>{heroLabel}</span>
-            <div style={{ display: "flex", gap: 28, marginTop: 28 }}>
-              <span style={{ fontFamily: "JetBrains Mono", fontSize: 24, color: OG_COLORS.inkSoft }}>{s?.petCount ?? 0} Giglings</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 28 }}>
+              <span style={{ fontFamily: "JetBrains Mono", fontSize: 24, color: OG_COLORS.inkSoft }}>{s?.petCount ?? 0} Giglings held</span>
               <span style={{ fontFamily: "JetBrains Mono", fontSize: 24, color: OG_COLORS.gold }}>{valueText}</span>
             </div>
           </div>
 
-          {/* Character: the top horse */}
+          {/* Character: the stable's best horse, labeled so it reads as such */}
           {horseArt ? (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-              <img src={horseArt} width={260} height={260} style={{ borderRadius: 18, border: `2px solid ${OG_COLORS.line}` }} alt="" />
+              <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 2, marginBottom: 10 }}>Top horse</span>
+              <img src={horseArt} width={250} height={250} style={{ borderRadius: 18, border: `2px solid ${OG_COLORS.line}` }} alt="" />
               {topHorse && ranked && (
                 <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkSoft, marginTop: 12 }}>
                   #{topHorse.id} · {topHorse.confirmedQuality.toFixed(1)}
@@ -98,15 +100,18 @@ export default async function Image({ params }: { params: { address: string } })
               )}
             </div>
           ) : (
-            <div style={{ display: "flex", width: 260, height: 260, alignItems: "center", justifyContent: "center", borderRadius: 18, border: `2px solid ${OG_COLORS.line}` }}>
+            <div style={{ display: "flex", width: 250, height: 250, alignItems: "center", justifyContent: "center", borderRadius: 18, border: `2px solid ${OG_COLORS.line}` }}>
               <span style={{ color: OG_COLORS.glow, fontSize: 90 }}>✳</span>
             </div>
           )}
         </div>
 
-        {/* URL + brand */}
+        {/* Brand footer: no URL (the link-unfurl carries the real URL), wordmark
+            above carries the brand. A short positive descriptor on the left. */}
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
-          <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.ink }}>{SHARE_URL}</span>
+          <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
+            Ranked on proven horses
+          </span>
           <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 1 }}>
             a Patch Notes product
           </span>

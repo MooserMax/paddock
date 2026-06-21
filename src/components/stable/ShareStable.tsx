@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { StableSkill } from "@/lib/api/types";
-import { formatPercentile } from "@/lib/format";
+import { stableStanding } from "@/lib/format";
 
 // Share trigger on the stable report: an honest pre-filled post (X intent), a
 // copy-link action, and a download of the rendered card image. The post text
@@ -12,9 +12,11 @@ export default function ShareStable({ address, skill }: { address: string; skill
   const [copied, setCopied] = useState(false);
 
   const url = typeof window !== "undefined" ? `${window.location.origin}/wallet/${address}` : `/wallet/${address}`;
+  // Brag a percentile only when genuinely top quartile; otherwise a neutral line,
+  // so a low-ranked stable never posts an awkward "rank 197 of 197".
   const text =
-    skill.state === "ranked" && skill.percentile != null
-      ? `My Gigling stable is ${formatPercentile(skill.percentile)} by proven roster quality on Paddock. Check yours:`
+    skill.state === "ranked" && skill.percentile != null && skill.percentile <= 0.25
+      ? `My Gigling stable is ${stableStanding(skill.percentile, skill.rank, skill.eligibleTotal)} by proven roster quality on Paddock. Check yours:`
       : "My Gigling stable on Paddock. Check yours:";
   const intent = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
 

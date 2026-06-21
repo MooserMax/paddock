@@ -96,14 +96,14 @@ export default async function WalletPage({ params }: PageProps) {
 
           {/* Stable value + flags: the above-the-fold headline on mobile */}
           <div className="assemble mt-6 grid gap-4 lg:grid-cols-[1.4fr_1fr]" style={{ animationDelay: "40ms" }}>
-            <Panel eyebrow="Estimated stable value" title="" note="Band-based, summed from comparable-sales valuations. An estimate, not a quote.">
+            <Panel eyebrow="Estimated stable value" title="" note="Combined from per-horse comp bands; the band narrows as partly-independent per-horse errors cancel across the stable. An estimate, not a quote.">
               {stableValue.lowEth !== null ? (
                 <div>
                   <p className="type-page-title tabular-nums text-ink">
                     {formatEth(stableValue.lowEth, 2)} <span className="text-ink-faint">to</span> {formatEth(stableValue.highEth, 2)}
                   </p>
                   <p className="type-micro mt-2 normal-case text-ink-faint">
-                    From {formatInt(stableValue.compCountTotal)} comparable sales across the hatched stable. Horses with thin comps are excluded from the total.
+                    Midpoint summed from {formatInt(stableValue.compCountTotal)} comparable sales across the hatched stable; the band combines per-horse uncertainties in quadrature, with a market-correlation factor so it does not assume every horse moves together. Horses with thin comps are excluded.
                   </p>
                 </div>
               ) : (

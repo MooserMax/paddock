@@ -36,12 +36,16 @@ export function formatInt(value: number | null | undefined): string {
   return Math.round(value).toLocaleString("en-US");
 }
 
-// A stable's competitive position as "Top X%". One decimal below 10%, whole at
-// or above, so "Top 0.5%" and "Top 47%" both read cleanly.
-export function formatPercentile(fraction: number | null | undefined): string {
-  if (fraction === null || fraction === undefined || !Number.isFinite(fraction)) return "unranked";
-  const pct = fraction * 100;
-  return `Top ${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
+// The single rule for a stable's competitive standing, shared by the leaderboard,
+// the report bar, and the share card. Lead with percentile only near the top
+// (top quartile); below that lead with rank, so the worst stable reads "Rank 197
+// of 197", never the broken/insulting "Top 100%". The percentile uses floor with
+// a clamp at 1, so the very best reads "Top 1%", never "Top 0%". The 25% cutoff is
+// a deliberate display choice, not a statistical threshold.
+export function stableStanding(percentile: number | null | undefined, rank: number | null | undefined, total: number | null | undefined): string {
+  if (percentile == null || rank == null || total == null || !Number.isFinite(percentile)) return "unranked";
+  if (percentile <= 0.25) return `Top ${Math.max(1, Math.floor(percentile * 100))}%`;
+  return `Rank ${rank} of ${total}`;
 }
 
 export function formatScore(value: number | null | undefined): string {
