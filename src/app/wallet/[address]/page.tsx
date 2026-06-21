@@ -5,6 +5,7 @@ import type { WalletSummary } from "@/lib/api/types";
 import PetCard from "@/components/PetCard";
 import Panel from "@/components/ui/Panel";
 import StableSkillCard from "@/components/stable/StableSkillCard";
+import ShareStable from "@/components/stable/ShareStable";
 import WalletSearch from "@/components/WalletSearch";
 import { TRACK_LABEL } from "@/lib/display";
 import { formatEth, formatInt, formatScore, shortAddress, ownerDisplay } from "@/lib/format";
@@ -19,10 +20,15 @@ interface PageProps {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const addr = decodeURIComponent(params.address);
   const label = await resolveOwnerName(addr); // username when known, else truncated
+  const ogImage = `/wallet/${addr}/opengraph-image`;
+  const description = `Paddock stable grade for ${label}: proven roster quality, A-team, reveal queue, and estimated value.`;
   return {
     title: `Stable ${label}`,
-    description: `Paddock stable intelligence report for ${label}: A-team, hidden gems, reveal queue, and estimated value.`,
-    openGraph: { images: [`/wallet/${addr}/opengraph-image`] },
+    description,
+    // og:image and twitter:image both point to the rendered share card, so a
+    // pasted stable link unfurls as the card on X, Discord, Telegram, Farcaster.
+    openGraph: { title: `Stable ${label}`, description, images: [ogImage] },
+    twitter: { card: "summary_large_image", title: `Stable ${label}`, description, images: [ogImage] },
   };
 }
 
@@ -83,6 +89,9 @@ export default async function WalletPage({ params }: PageProps) {
           {/* Stable skill: the competitive hook, above the value/flags cards */}
           <div className="mt-8">
             <StableSkillCard skill={summary.skill} />
+            <div className="mt-3">
+              <ShareStable address={summary.address} skill={summary.skill} />
+            </div>
           </div>
 
           {/* Stable value + flags: the above-the-fold headline on mobile */}
