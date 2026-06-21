@@ -13,11 +13,12 @@ const ENDPOINTS = [
   { method: "GET", path: "/wallet/0xA8A956a5690cc81bB367DA2C2f6f1796Be2B3C30", title: "Wallet summary", desc: "Stable report: A-team, hidden gems, reveal queue, track assignments, estimated value, flags." },
   { method: "GET", path: "/race/5667", title: "Race + scanner verdict", desc: "Entrants with records and ELO, payout structure, and the scanner verdict object." },
   { method: "GET", path: "/odds/race/5667", title: "Odds", desc: "Per-entrant win probabilities from the model. Calibrated out of sample at /calibration." },
-  { method: "GET", path: "/leaderboard?metric=cq&limit=10", title: "Leaderboard", desc: "Ranked by cq, elo, winrate (shrunk), or earnings. Paginated with limit and offset." },
+  { method: "GET", path: "/leaderboard?metric=cq&limit=10", title: "Leaderboard", desc: "Ranked by cq, elo, winrate (shrunk), earnings, or upside. metric=upside ranks lightly-revealed horses by reveal-adjusted upside (potential relative to how little they have shown), not a prediction. Paginated with limit (default 25, max 100) and offset." },
   { method: "GET", path: "/scan?pets=6249,3010,1971,442&track=1200&mark=6249", title: "Live-lobby scan", desc: "A verdict for an ad-hoc field that is not a stored race. Mark your horse to check its fit." },
   { method: "GET", path: "/races?limit=10", title: "Races feed", desc: "Recent resolved races. Filter by track length." },
   { method: "GET", path: "/calibration", title: "Calibration", desc: "The odds model's out-of-sample backtest: split, metrics, and the predicted-vs-actual buckets." },
   { method: "GET", path: "/stats", title: "Site stats", desc: "Headline counts and the data freshness timestamps." },
+  { method: "GET", path: "/health", title: "Health", desc: "Lightweight liveness check for monitors. Returns status, version, and time, with a fail-soft DB reachability flag. No heavy aggregation, safe to poll often." },
 ];
 
 export default function DocsPage() {
