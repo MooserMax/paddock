@@ -19,6 +19,10 @@
      contrast; it is the one accent used as a button background. */
   --action: #e8694f;
 
+  /* Shared easing for interactive state changes: a snappy ease-out (fast start,
+     gentle settle), so hovers and focus rings feel responsive, not floaty. */
+  --ease-out-paddock: cubic-bezier(0.2, 0, 0, 1);
+
   /* Dark mode (default): warm near-black ink, cream type */
   --paper: #14110f;
   --paper-raised: #1a1715;
@@ -120,7 +124,9 @@
     .type-section { font-size: 2rem; }
   }
 
-  /* Focus ring: a single, visible, theme-aware ring on every interactive element. */
+  /* Focus ring: a single, visible, theme-aware ring on every interactive element.
+     Keyboard focus only (:focus-visible); buttons, links, and tabbables keep this
+     exactly. */
   .focusable:focus-visible,
   a:focus-visible,
   button:focus-visible,
@@ -128,6 +134,22 @@
     outline: 2px solid var(--glow);
     outline-offset: 2px;
     border-radius: 3px;
+  }
+
+  /* Text fields get a visible active state on plain :focus, including pointer
+     focus (where :focus-visible does not fire and the field would otherwise fall
+     back to its faint default border). A coral border plus a soft coral ring, so
+     the live field is obvious while typing. The ring is box-shadow, so there is no
+     layout shift; the border is important to override the field's inline default.
+     Scoped to text fields only, so buttons keep their :focus-visible outline above
+     untouched. Holds in both themes (--action is coral in each). */
+  input:not([type]):focus,
+  input[type="text"]:focus,
+  input[type="search"]:focus,
+  input[type="email"]:focus,
+  textarea:focus {
+    border-color: var(--action) !important;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--action) 20%, transparent);
   }
 
   /* Uppercase mono eyebrow label */
@@ -224,16 +246,25 @@
   }
 
   .transition-paddock {
-    transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease, transform 180ms ease, opacity 180ms ease;
+    transition:
+      color 150ms var(--ease-out-paddock),
+      background-color 150ms var(--ease-out-paddock),
+      border-color 150ms var(--ease-out-paddock),
+      opacity 150ms var(--ease-out-paddock),
+      box-shadow 150ms var(--ease-out-paddock),
+      transform 180ms var(--ease-out-paddock);
   }
 }
 
-/* Honor reduced-motion everywhere: no entrance animation, no shimmer travel. */
+/* Honor reduced-motion everywhere: real timing by default (above), near-instant
+   here for users who request reduced motion, so every hover, focus ring, and
+   entrance settles immediately rather than easing. 0.01ms is the canonical
+   near-zero reset. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
-    animation-duration: 0.001ms !important;
+    animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+    transition-duration: 0.01ms !important;
   }
   .assemble { opacity: 1; transform: none; }
 }
