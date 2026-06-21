@@ -78,9 +78,12 @@ export default function ScannerControls({ defaultMode = "race" }: { defaultMode?
               Read the verdict
             </button>
           </div>
-          <div className="flex flex-wrap gap-2 pt-1">
-            <Example label="Example: race #5667" onClick={() => router.push("/scanner?race=5667")} />
-            <Example label="An enterable race #6368" onClick={() => router.push("/scanner?race=6368")} />
+          <p className="type-micro pt-1 normal-case text-ink-faint">
+            Calibrated, not clairvoyant: two real races, one the model missed and one it nailed.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Example label="A call that missed" onClick={() => router.push("/scanner?race=5648")} />
+            <Example label="A call that landed" onClick={() => router.push("/scanner?race=5667")} />
           </div>
         </form>
       ) : (

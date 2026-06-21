@@ -83,8 +83,11 @@ export default async function ScannerPage({ searchParams }: { searchParams: SP }
               <span className="asterisk text-3xl">✳</span>
               <p className="type-card-title mt-3 text-ink">No field loaded</p>
               <p className="type-body mt-1 max-w-sm text-ink-soft">
-                Load the example race to see a real verdict: two sharks, a top-2 payout, and why this was a pass.
+                Load the example to watch the model get it wrong: a 99.9% favorite that finished third, graded against what actually happened.
               </p>
+              <Link href="/scanner?race=5648" className="type-micro mt-4 inline-block uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>
+                Load the miss
+              </Link>
             </div>
           )}
 
@@ -95,8 +98,8 @@ export default async function ScannerPage({ searchParams }: { searchParams: SP }
               <p className="type-body mt-2 text-ink-soft">
                 If this race has not run yet, it will not be in our database. Grade it with the upcoming-race option above by pasting the lobby&apos;s Giglings instead.
               </p>
-              <Link href="/scanner?race=5667" className="type-micro mt-4 inline-block uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>
-                Or load the example past race
+              <Link href="/scanner?race=5648" className="type-micro mt-4 inline-block uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>
+                Or load the example race
               </Link>
             </div>
           )}
