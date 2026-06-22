@@ -108,8 +108,12 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
 
       {lobbies.length === 0 ? (
         <div className="panel p-8 text-center">
-          <p className="type-card-title text-ink">No open lobbies right now</p>
-          <p className="type-body mt-1 text-ink-soft">Forming races come and go in seconds. This board updates live, check back in a moment.</p>
+          <p className="type-card-title text-ink">{data?.delayed ? "Live data is delayed" : "No open lobbies right now"}</p>
+          <p className="type-body mt-1 text-ink-soft">
+            {data?.delayed
+              ? "The live feed is catching up, so rather than show a stale field we are holding off. Fresh lobbies appear here as soon as the feed recovers."
+              : "Forming races come and go in seconds. This board updates live, check back in a moment."}
+          </p>
         </div>
       ) : (
         <div className="grid gap-3">
