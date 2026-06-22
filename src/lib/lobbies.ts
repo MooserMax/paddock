@@ -1,39 +1,45 @@
-import { db } from "./db";
-import type { GigaRace } from "./gigaverse";
+import { decodeAbiParameters } from "viem";
+import {
+  fetchLobbyLogs,
+  latestBlock,
+  TOPIC_RACE_CREATED,
+  TOPIC_RACE_CONFIG,
+  TOPIC_RACE_JOINED,
+  TOPIC_RACE_RESOLVED,
+  type RawLog,
+} from "./chain";
+import { fetchRace } from "./gigaverse";
 
-// Live forming-lobby snapshot for Race Finder. Lobbies form and fill in seconds,
-// faster than the slow cron, so this polls the Gigaverse REST API directly, but
-// politely: only on demand (when a viewer's client requests it, never a background
-// job), bounded to the frontier window (not history), with a short server-side
-// cache so one upstream poll fans out to all concurrent viewers. Stale-while-
-// revalidate: a cached snapshot returns instantly while a single in-flight refresh
-// runs, so 100 viewers do not mean 100x the upstream calls.
+// Live forming-lobby snapshot for Race Finder, read from the Abstract blockchain.
 //
-// Resilience model (the part that previously got stuck):
-//  - A 429 on one id in the window does NOT discard the whole refresh. Any
-//    successful upstream round-trip updates the snapshot and clears delayed, so a
-//    partial throttle can never freeze the cache. delayed is true ONLY when an
-//    entire refresh got zero successful fetches.
-//  - Resolved races (phase != 1 never re-forms) are remembered and skipped, so the
-//    steady-state poll keeps re-fetching only the genuinely forming frontier band
-//    plus a small probe above it. This keeps the per-refresh call budget low enough
-//    not to trip the rate limit in the first place.
-//  - The frontier estimate walks up toward the live edge whenever real races are
-//    found above the DB max, so a lagging cron does not strand the scan below the
-//    forming lobbies.
-//  - A hard staleness ceiling: past it, the snapshot is not "live"; we stop serving
-//    its lobbies as a current field and show the delayed state instead.
+// Why chain, not REST: the Gigaverse REST API rate-limits under near-real-time
+// polling, so a per-race poll loop got 429'd and the snapshot froze. The Abstract
+// public RPC (api.mainnet.abs.xyz) is free, keyless, and unthrottled, so this reads
+// race state straight from the PetRacingSystem event log instead. Discovery is
+// incremental from a persisted block cursor (eth_getLogs over only the new blocks),
+// and a forming race is reconstructed entirely from its events:
+//   RACE_CONFIG  -> fieldSize, trackLength
+//   RACE_CREATED -> payoutBps
+//   RACE_JOINED  -> each entrant (petId, owner), in slot order
+//   RACE_RESOLVED-> the race is done, drop it
+// All four decodings were cross-checked against /api/racing/race/{id} on live
+// races. Steady state is a single eth_getLogs per refresh.
+//
+// The snapshot, fan-out cache, and staleness ceiling are unchanged from before: one
+// upstream read fans out to all viewers, and past the ceiling we never render an old
+// snapshot as live. With an unthrottled RPC, delayed should essentially never fire.
 
-const BASE = "https://gigaverse.io/api";
-const WINDOW_BELOW = 4; // forming lobbies sit at the frontier; a few below catch just-created ids
-const WINDOW_ABOVE = 6; // probe above the DB max for brand-new lobbies and to walk up a lagging frontier
-const CONCURRENCY = 3; // polite parallelism per refresh
-const FRESH_MS = 4000; // a clean snapshot is fresh for this long
-const MILD_BACKOFF_MS = 8000; // ease off briefly after a partial throttle, then return to FRESH_MS
-const DEGRADED_MS = 15000; // back off the refresh cadence when a whole refresh fails
+const FRESH_MS = 4000; // a snapshot is fresh for this long
+const DEGRADED_MS = 8000; // back off briefly only if an RPC read actually fails
 const STALE_CEILING_MS = 60000; // past this age the snapshot is not live; do not serve it as a field
-const FETCH_TIMEOUT_MS = 4000;
 export const POLL_MS = 4000; // suggested client poll interval
+
+// Abstract blocks are ~0.5s. A forming race lives a couple of minutes at most, so a
+// ~20 minute lookback on a cold start comfortably catches anything still forming,
+// and resolved/abandoned races are pruned past the same horizon.
+const INITIAL_LOOKBACK_BLOCKS = 2400n;
+const MAX_AGE_BLOCKS = 2400n;
+const ENRICH_PER_REFRESH = 3; // cap on fee/pool REST reads for newly seen races per refresh
 
 export interface OpenLobby {
   raceId: number;
@@ -48,120 +54,183 @@ export interface OpenLobby {
   entries: { petId: number; ownerAddress: string | null; juiced: boolean }[];
 }
 
+interface RaceState {
+  raceId: number;
+  fieldSize: number; // 0 until the CONFIG event is seen
+  trackLength: number;
+  payoutBps: number[];
+  entries: { petId: number; ownerAddress: string | null; juiced: boolean }[];
+  resolved: boolean;
+  block: number; // last block this race was touched, for pruning
+  entryFeeWei: string;
+  poolWei: string | null;
+  feeKnown: boolean; // whether the (optional) fee/pool enrichment has run
+}
+
 interface Snapshot {
   lobbies: OpenLobby[];
   fetchedAt: number;
-  frontier: number;
+  tip: number;
 }
 
 let cache: Snapshot | null = null;
 let inflight: Promise<void> | null = null;
 let delayed = false;
 let ttl = FRESH_MS;
-let frontierEst = 0; // highest race id known to exist; walks up toward the live edge
-const resolved = new Set<number>(); // race ids past forming (phase != 1); never re-fetched
+let cursor: bigint | null = null; // last block scanned; persists across refreshes in-process
+const races = new Map<number, RaceState>();
+const enriching = new Set<number>(); // races with a fee/pool read in flight, so we never double-fetch
 
-async function quickFetchRace(id: number): Promise<GigaRace | null> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+function topicBig(t: string | undefined): number {
+  return t ? Number(BigInt(t)) : 0;
+}
+function topicAddr(t: string | undefined): string | null {
+  if (!t) return null;
+  return ("0x" + t.slice(-40)).toLowerCase();
+}
+
+// payoutBps is the first uint256[] of the CREATED tuple (uint256[], uint256,
+// uint256[], uint256[]); we only need that first array.
+function decodePayout(data: `0x${string}`): number[] {
   try {
-    const res = await fetch(`${BASE}/racing/race/${id}`, { headers: { accept: "application/json" }, cache: "no-store", signal: ctl.signal });
-    if (!res.ok) {
-      if (res.status === 429) throw new Error("429"); // surfaces as throttle to the caller
-      return null; // 404 or other: a successful round-trip, this id simply has no race (yet)
-    }
-    return (await res.json()) as GigaRace;
-  } finally {
-    clearTimeout(timer);
+    const [bps] = decodeAbiParameters(
+      [{ type: "uint256[]" }, { type: "uint256" }, { type: "uint256[]" }, { type: "uint256[]" }],
+      data
+    );
+    return (bps as readonly bigint[]).map((n) => Number(n));
+  } catch {
+    return [];
   }
 }
 
-async function frontierMax(): Promise<number> {
-  const { data } = await db().from("races").select("race_id").order("race_id", { ascending: false }).limit(1).maybeSingle();
-  return (data?.race_id as number | undefined) ?? 0;
+// CONFIG data words 0 and 1 are fieldSize and trackLength (verified against REST).
+function decodeConfig(data: string): { fieldSize: number; trackLength: number } {
+  const h = data.startsWith("0x") ? data.slice(2) : data;
+  const word = (i: number) => (h.length >= (i + 1) * 64 ? Number(BigInt("0x" + h.slice(i * 64, i * 64 + 64))) : 0);
+  return { fieldSize: word(0), trackLength: word(1) };
 }
 
-interface RefreshResult {
-  lobbies: OpenLobby[];
-  frontier: number;
-  throttled: boolean; // at least one id 429'd
-  successCount: number; // upstream round-trips that completed (incl. 404s); 0 means a real outage
-}
-
-async function refreshSnapshot(): Promise<RefreshResult> {
-  const dbMax = await frontierMax();
-  const center = Math.max(dbMax, frontierEst);
-
-  // Prune the resolved set to the live window so it cannot grow without bound as the
-  // frontier advances.
-  const lowWatermark = center - WINDOW_BELOW;
-  for (const id of resolved) if (id < lowWatermark) resolved.delete(id);
-
-  const ids: number[] = [];
-  for (let id = center - WINDOW_BELOW; id <= center + WINDOW_ABOVE; id++) {
-    if (id > 0 && !resolved.has(id)) ids.push(id); // skip races already known resolved
+function ensureRace(raceId: number, block: number): RaceState {
+  let r = races.get(raceId);
+  if (!r) {
+    r = { raceId, fieldSize: 0, trackLength: 0, payoutBps: [], entries: [], resolved: false, block, entryFeeWei: "0", poolWei: null, feeKnown: false };
+    races.set(raceId, r);
   }
+  if (block > r.block) r.block = block;
+  return r;
+}
 
-  const lobbies: OpenLobby[] = [];
-  let throttled = false;
-  let successCount = 0;
-  let highestSeen = center;
-
-  for (let i = 0; i < ids.length; i += CONCURRENCY) {
-    const batch = ids.slice(i, i + CONCURRENCY);
-    const results = await Promise.allSettled(batch.map((id) => quickFetchRace(id).then((race) => ({ id, race }))));
-    for (const r of results) {
-      if (r.status === "rejected") { throttled = true; continue; } // a 429 on this id; the rest still count
-      successCount++;
-      const { id, race } = r.value;
-      if (!race || !race.success) continue; // 404 or empty: nothing here yet
-      if (id > highestSeen) highestSeen = id; // a real race exists here, so the frontier is at least this high
-      if (race.phase !== 1) { resolved.add(id); continue; } // running or resolved: never re-forms, stop re-fetching it
-      const fieldSize = race.fieldSize ?? 0;
-      const entries = race.entries ?? [];
-      const petCount = entries.length;
-      const openSlots = fieldSize - petCount;
-      if (fieldSize <= 0 || openSlots <= 0) continue; // no field size or already full
-      if (petCount < 1) continue; // empty shell: the field has not formed, never surface it as a real lobby
-      lobbies.push({
-        raceId: race.raceId,
-        trackLength: race.trackLength,
-        raceTemp: race.raceTemp || null,
-        fieldSize,
-        petCount,
-        openSlots,
-        entryFeeWei: String(race.entryFee ?? "0"),
-        poolWei: race.pool != null ? String(race.pool) : null,
-        payoutBps: race.payoutBps ?? [],
-        entries: entries.map((e) => ({ petId: e.petId, ownerAddress: e.ownerAddress?.toLowerCase() ?? null, juiced: !!e.juiced })),
-      });
+function applyLogs(logs: RawLog[]): void {
+  // Apply in chain order so joins land after their race's creation/config.
+  const ordered = [...logs].sort((a, b) => {
+    const ab = Number(BigInt(a.blockNumber)) - Number(BigInt(b.blockNumber));
+    return ab !== 0 ? ab : topicBig((a as unknown as { logIndex?: string }).logIndex) - topicBig((b as unknown as { logIndex?: string }).logIndex);
+  });
+  for (const log of ordered) {
+    const t0 = log.topics[0];
+    const raceId = topicBig(log.topics[1]);
+    if (!raceId) continue;
+    const block = Number(BigInt(log.blockNumber));
+    const r = ensureRace(raceId, block);
+    if (t0 === TOPIC_RACE_CONFIG) {
+      const { fieldSize, trackLength } = decodeConfig(log.data);
+      r.fieldSize = fieldSize;
+      r.trackLength = trackLength;
+    } else if (t0 === TOPIC_RACE_CREATED) {
+      r.payoutBps = decodePayout(log.data as `0x${string}`);
+    } else if (t0 === TOPIC_RACE_JOINED) {
+      const petId = topicBig(log.topics[2]);
+      const ownerAddress = topicAddr(log.topics[3]);
+      if (petId && !r.entries.some((e) => e.petId === petId)) {
+        r.entries.push({ petId, ownerAddress, juiced: false });
+      }
+    } else if (t0 === TOPIC_RACE_RESOLVED) {
+      r.resolved = true;
     }
   }
+}
 
-  lobbies.sort((a, b) => b.raceId - a.raceId); // newest first
-  frontierEst = highestSeen; // walk the frontier up toward the live edge for the next refresh
-  return { lobbies, frontier: highestSeen, throttled, successCount };
+function pruneRaces(tip: number): void {
+  for (const [id, r] of races) {
+    if (r.resolved || tip - r.block > Number(MAX_AGE_BLOCKS)) races.delete(id);
+  }
+}
+
+// A forming lobby: created, not resolved, its field shape known, at least one horse
+// in (so it is a real forming field, never an empty shell), and open slots left.
+function formingLobbies(): OpenLobby[] {
+  const out: OpenLobby[] = [];
+  for (const r of races.values()) {
+    if (r.resolved || r.fieldSize <= 0) continue;
+    const petCount = r.entries.length;
+    if (petCount < 1 || petCount >= r.fieldSize) continue;
+    out.push({
+      raceId: r.raceId,
+      trackLength: r.trackLength,
+      raceTemp: null, // conditions are assigned when the race starts, not while forming
+      fieldSize: r.fieldSize,
+      petCount,
+      openSlots: r.fieldSize - petCount,
+      entryFeeWei: r.entryFeeWei,
+      poolWei: r.poolWei,
+      payoutBps: r.payoutBps,
+      entries: r.entries.map((e) => ({ ...e })),
+    });
+  }
+  out.sort((a, b) => b.raceId - a.raceId); // newest first
+  return out;
+}
+
+// entryFee and pool are not carried by the events, so for EV on the rare paid race
+// we read them once per race from the public API, cache them, and tolerate failure
+// (default free, EV null). This is strictly off the hot path: at most a few reads
+// for newly seen races, never per-poll-per-race, and a failure here can never freeze
+// the snapshot or flip delayed (that is driven only by the RPC read).
+async function enrichFees(lobbies: OpenLobby[]): Promise<void> {
+  const fresh = lobbies.filter((l) => {
+    const r = races.get(l.raceId);
+    return r && !r.feeKnown && !enriching.has(l.raceId);
+  }).slice(0, ENRICH_PER_REFRESH);
+  await Promise.allSettled(fresh.map(async (l) => {
+    enriching.add(l.raceId);
+    try {
+      const race = await fetchRace(l.raceId);
+      const r = races.get(l.raceId);
+      if (r) {
+        r.entryFeeWei = String(race.entryFee ?? "0");
+        r.poolWei = race.pool != null ? String(race.pool) : null;
+        const juicedByPet = new Map((race.entries ?? []).map((e) => [e.petId, !!e.juiced]));
+        for (const e of r.entries) e.juiced = juicedByPet.get(e.petId) ?? e.juiced;
+        r.feeKnown = true;
+      }
+    } catch {
+      // leave fee at 0 (treated as a free race, EV null); never blocks the lobby
+    } finally {
+      enriching.delete(l.raceId);
+    }
+  }));
 }
 
 async function doRefresh(): Promise<void> {
   try {
-    const snap = await refreshSnapshot();
-    if (snap.successCount > 0) {
-      // Any successful upstream round-trip means we just observed the current
-      // frontier: refresh the snapshot and clear delayed, even if a few ids 429'd.
-      // This is what guarantees recovery; the cache can never freeze while we can
-      // still reach upstream at all.
-      cache = { lobbies: snap.lobbies, fetchedAt: Date.now(), frontier: snap.frontier };
-      delayed = false;
-      ttl = snap.throttled ? MILD_BACKOFF_MS : FRESH_MS; // ease off briefly if partly throttled, else full cadence
-    } else {
-      // Zero successful fetches: a genuine outage or hard throttle. Keep the last
-      // snapshot, flag delayed, and back off the retry cadence.
-      delayed = true;
-      ttl = DEGRADED_MS;
+    const tip = await latestBlock();
+    const from = cursor == null ? tip - INITIAL_LOOKBACK_BLOCKS + 1n : cursor + 1n;
+    if (from <= tip) {
+      const logs = await fetchLobbyLogs(from < 0n ? 0n : from, tip);
+      applyLogs(logs);
     }
+    cursor = tip;
+    const tipNum = Number(tip);
+    pruneRaces(tipNum);
+    const lobbies = formingLobbies();
+    // Best-effort fee/pool enrichment for newly seen forming races (off hot path).
+    await enrichFees(lobbies);
+    cache = { lobbies: formingLobbies(), fetchedAt: Date.now(), tip: tipNum };
+    delayed = false;
+    ttl = FRESH_MS;
   } catch {
-    // frontierMax (DB) or an unexpected error: degrade, keep the last snapshot.
+    // An RPC read failed: keep the last snapshot, flag delayed, back off briefly.
+    // With an unthrottled RPC this should essentially never happen.
     delayed = true;
     ttl = DEGRADED_MS;
   }
@@ -170,8 +239,8 @@ async function doRefresh(): Promise<void> {
 // Returns the current snapshot. Serves a cached snapshot instantly and kicks off at
 // most one background refresh when stale (stale-while-revalidate); only the very
 // first call, with no cache yet, awaits the refresh. Past the staleness ceiling the
-// snapshot is no longer treated as live: we return no lobbies (flagged delayed) so
-// an old, possibly empty field is never rendered as if it were current.
+// snapshot is no longer treated as live: we return no lobbies (flagged delayed) so an
+// old field is never rendered as if current.
 export async function getOpenLobbies(): Promise<{ lobbies: OpenLobby[]; fetchedAt: number | null; delayed: boolean }> {
   const now = Date.now();
   const stale = !cache || now - cache.fetchedAt >= ttl;
@@ -181,9 +250,6 @@ export async function getOpenLobbies(): Promise<{ lobbies: OpenLobby[]; fetchedA
   const fetchedAt = cache?.fetchedAt ?? null;
   const age = cache ? now - cache.fetchedAt : Infinity;
   if (age > STALE_CEILING_MS) {
-    // Honesty ceiling: this snapshot is too old to call live. Do not serve its
-    // lobbies (their fields and edge would be fiction); show the delayed state until
-    // a fresh fetch lands. fetchedAt is still returned so the indicator reads true.
     return { lobbies: [], fetchedAt, delayed: true };
   }
   return { lobbies: cache?.lobbies ?? [], fetchedAt, delayed };

@@ -23,6 +23,27 @@ export const TOPIC_RACE_CREATED =
 export const TOPIC_RACE_RESOLVED =
   "0xfd6f2ec0d5b0c729a44291652465b5fbd261acb855f8980662e847fb5a7f7469";
 
+// The live PetRacingSystem. Current racing (creation, config, joins, resolution)
+// emits here; the historical RACING_CONTRACT above stopped emitting after a
+// contract migration, so live forming-lobby reads target this address instead.
+// Every topic and field below was decoded from real logs and cross-checked
+// against /api/racing/race/{id} for live races (see src/lib/lobbies.ts).
+export const PETRACING_CONTRACT = "0xf6ed2a53f311352c869e268601aae5b78b9a9650";
+
+// Additional event topics on PETRACING_CONTRACT, beyond CREATED/RESOLVED above:
+// - RACE_CONFIG fires once per race at creation. topic1 = raceId (indexed),
+//   topic2 = creator (indexed); data = [fieldSize, trackLength, ...]. Verified:
+//   data word 0 == fieldSize and word 1 == trackLength on every sampled race.
+// - RACE_JOINED fires once per entrant, in slot order. topic1 = raceId,
+//   topic2 = petId, topic3 = owner (all indexed); no data. This is how a forming
+//   field populates as horses enter.
+// RACE_CREATED (TOPIC_RACE_CREATED) additionally carries payoutBps in its data
+// as the first uint256[] of the tuple (uint256[], uint256, uint256[], uint256[]).
+export const TOPIC_RACE_CONFIG =
+  "0x3140283acc902bb8af484fc157968628a25250c6f6f93ad8d07a0aeb674b3d28";
+export const TOPIC_RACE_JOINED =
+  "0xa5b60649bd7726669cdec0e1f69faf3e3533ba803f6660b010e91325a0311751";
+
 export const DEFAULT_RPC_URL = "https://api.mainnet.abs.xyz";
 
 let client: PublicClient | null = null;
@@ -115,6 +136,36 @@ export async function fetchRacingLogs(
     const mid = fromBlock + (toBlock - fromBlock) / 2n;
     const left = await fetchRacingLogs(fromBlock, mid);
     const right = await fetchRacingLogs(mid + 1n, toBlock);
+    return [...left, ...right];
+  }
+}
+
+// eth_getLogs for the live PetRacingSystem lobby events (created, config, joined,
+// resolved) over a block range, with the same halve-on-rejection fallback as
+// fetchRacingLogs. A single forming-lobby refresh is one of these calls over only
+// the blocks added since the last cursor, so the steady-state cost is one RPC call.
+export async function fetchLobbyLogs(
+  fromBlock: bigint,
+  toBlock: bigint
+): Promise<RawLog[]> {
+  if (fromBlock > toBlock) return [];
+  try {
+    return (await chainClient().request({
+      method: "eth_getLogs",
+      params: [
+        {
+          address: PETRACING_CONTRACT as Hex,
+          fromBlock: `0x${fromBlock.toString(16)}`,
+          toBlock: `0x${toBlock.toString(16)}`,
+          topics: [[TOPIC_RACE_CREATED, TOPIC_RACE_CONFIG, TOPIC_RACE_JOINED, TOPIC_RACE_RESOLVED]],
+        },
+      ],
+    })) as RawLog[];
+  } catch (err) {
+    if (toBlock - fromBlock < 200n) throw err;
+    const mid = fromBlock + (toBlock - fromBlock) / 2n;
+    const left = await fetchLobbyLogs(fromBlock, mid);
+    const right = await fetchLobbyLogs(mid + 1n, toBlock);
     return [...left, ...right];
   }
 }
