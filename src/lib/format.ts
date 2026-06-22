@@ -37,21 +37,17 @@ export function formatInt(value: number | null | undefined): string {
 }
 
 // The single rule for a stable's competitive standing, shared by the leaderboard,
-// the report bar, and the share card. Lead with percentile only near the top
-// (top quartile); below that lead with rank, so the worst stable reads "Rank 197
-// of 197", never the broken/insulting "Top 100%". The percentile uses floor with
-// a clamp at 1, so the very best reads "Top 1%", never "Top 0%". The 25% cutoff is
-// a deliberate display choice, not a statistical threshold.
-// The number of top ranks shown as an EXPLICIT rank (with denominator) rather
-// than a percentile. A rounded percentile collapses distinct top ranks together
-// (rank 1 and rank 2 both floor to "Top 1%"), so the top of the board must carry
-// its literal rank; only below this does "Top X%" become the more legible hero.
-export const RANK_EXPLICIT_TOP = 10;
-
-export function stableStanding(percentile: number | null | undefined, rank: number | null | undefined, total: number | null | undefined): string {
-  if (percentile == null || rank == null || total == null || !Number.isFinite(percentile)) return "unranked";
-  if (rank <= RANK_EXPLICIT_TOP) return `Rank ${rank} of ${total}`;
-  return `Top ${Math.max(1, Math.floor(percentile * 100))}%`;
+// the report bar, and the share card. One format top to bottom: the explicit
+// "Rank N of {total}", so every stable is directly comparable and the precise
+// standing always shows. The percentile is rounded and less precise, and mixing
+// it in forced viewers to convert between an ordinal and a percentage; the
+// progress bar already conveys the proportional "where you sit". A low rank shows
+// a high number on purpose (e.g. "Rank 180 of 195"), unsoftened. The rank-1
+// special treatment ("#1 STABLE" / "The top stable in the game") lives in the
+// surfaces. The percentile param is kept for call-site compatibility and the API.
+export function stableStanding(_percentile: number | null | undefined, rank: number | null | undefined, total: number | null | undefined): string {
+  if (rank == null || total == null || !Number.isFinite(rank) || !Number.isFinite(total)) return "unranked";
+  return `Rank ${rank} of ${total}`;
 }
 
 // A single horse's confirmed-quality standing in the whole game, e.g. "top 0.03%".

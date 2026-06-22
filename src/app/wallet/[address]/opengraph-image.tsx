@@ -47,9 +47,9 @@ export default async function Image({ params }: { params: { address: string } })
   const horseArt = await imageDataUrl(topHorse?.imgUrl);
 
   // Hero figure, optimized for the brag: rank 1 stands alone as "#1 STABLE" with
-  // no denominator (the pool size only shrinks the flex); the rest of the top
-  // board shows its explicit rank with denominator (#2 of 195) so distinct ranks
-  // never collide; mid and lower show "TOP X%" where a percentage reads better.
+  // no denominator (the pool size only shrinks the flex). Every other ranked
+  // stable shows its explicit rank with denominator ("#52 OF 195"), one format
+  // top to bottom so stables are directly comparable.
   let heroValue: string;
   let heroLabel: string;
   if (ranked) {
@@ -57,11 +57,8 @@ export default async function Image({ params }: { params: { address: string } })
     if (r === 1) {
       heroValue = "#1 STABLE";
       heroLabel = "the best stable in the game, by proven roster quality";
-    } else if (r <= 10) {
-      heroValue = `#${r} OF ${skill!.eligibleTotal}`;
-      heroLabel = "by proven roster quality";
     } else {
-      heroValue = `TOP ${Math.max(1, Math.floor((skill!.percentile ?? 0) * 100))}%`;
+      heroValue = `#${r} OF ${skill!.eligibleTotal}`;
       heroLabel = "by proven roster quality";
     }
   } else {
