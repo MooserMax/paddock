@@ -1269,7 +1269,6 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
   const allIds = [...open.flatMap((l) => l.entries.map((e) => e.petId)), ...candidateIds];
   const strength = await strengthByIds(allIds);
   const ownerNames = await lookupUsernames([...new Set(open.flatMap((l) => l.entries.map((e) => strength.get(e.petId)?.ownerAddress ?? null)))]);
-  const threshold = await eloThreshold();
 
   const buildEntrant = (e: OpenLobby["entries"][number]): LobbyEntrant => {
     const s = strength.get(e.petId);
