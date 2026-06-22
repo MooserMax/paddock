@@ -323,6 +323,55 @@ export interface RaceListResponse {
   meta: { source: string };
 }
 
+// ---- Race Finder, live forming lobbies + your edge ----------------------------
+export interface LobbyEntrant {
+  petId: number;
+  name: string | null;
+  ownerName: string | null;
+  ownerAddress: string | null;
+  rarity: number;
+  elo: number | null;
+  confirmedQuality: number;
+  isShark: boolean;
+  juiced: boolean;
+  known: boolean; // false if we have no strength data for this horse yet
+}
+
+export interface LobbyEdge {
+  petId: number;
+  petName: string | null;
+  pWin: number; // your win probability if the field stays as-is, calibrated estimate
+  evWei: string | null; // expected value in wei, null for free races (no monetary EV)
+  eligibleCount: number; // how many of your horses could enter this lobby
+}
+
+export interface LobbyRow {
+  raceId: number;
+  trackLength: number;
+  raceTemp: string | null; // null while forming, conditions are set at start
+  fieldSize: number;
+  petCount: number;
+  openSlots: number;
+  entryFeeWei: string;
+  poolWei: string | null;
+  payoutBps: number[];
+  entrants: LobbyEntrant[];
+  fieldStrength: { avgElo: number | null; sharkCount: number; topCq: number };
+  edge: LobbyEdge | null; // present when a wallet/pet is given and a horse is eligible
+}
+
+export interface LobbyResponse {
+  lobbies: LobbyRow[];
+  wallet: string | null;
+  pet: number | null;
+  personalized: boolean;
+  rankedBy: "edge" | "open"; // edge (your pWin) when personalized, else by openSlots/recency
+  fetchedAt: string | null;
+  delayed: boolean; // live upstream is throttled, snapshot may be stale
+  pollMs: number; // suggested client poll interval
+  meta: { source: string; note: string };
+}
+
 export type RecordMode = "raw" | "adjusted";
 export type RecordWindow = "all" | "weekly" | "daily";
 

@@ -1184,3 +1184,162 @@ export async function getRecords(trackParam: number | null, mode: RecordMode, wi
     meta: { source: SOURCE, explanation: trackApplied ? RECORDS_EXPLANATION_ADJ : RECORDS_EXPLANATION_RAW, computedAt },
   };
 }
+
+// ---- Race Finder, live lobbies + your edge (read-only) ----------------------
+import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge } from "./types";
+import { getOpenLobbies, POLL_MS, type OpenLobby } from "../lobbies";
+
+const LOBBY_NOTE =
+  "Live forming lobbies, polled politely and cached a few seconds, so the data may lag a little. Your win probability is a calibrated estimate for the field as it stands, and it shifts as horses enter; it is never a guarantee.";
+
+// Strength fields for an entrant or candidate horse, joined from pets + pet_scores.
+interface Strength {
+  name: string | null;
+  ownerAddress: string | null;
+  rarity: number;
+  elo: number | null;
+  wins: number;
+  racesRun: number;
+  cq: number;
+  fit: Record<number, number>; // 500/1200/2400/3000
+}
+
+async function strengthByIds(ids: number[]): Promise<Map<number, Strength>> {
+  const out = new Map<number, Strength>();
+  if (ids.length === 0) return out;
+  const uniq = [...new Set(ids)];
+  for (let i = 0; i < uniq.length; i += 300) {
+    const chunk = uniq.slice(i, i + 300);
+    const [{ data: pets }, { data: scores }] = await Promise.all([
+      db().from("pets").select("id, name, owner_address, rarity, elo, wins, races_run").in("id", chunk),
+      db().from("pet_scores").select("pet_id, confirmed_quality, fit_500, fit_1200, fit_2400, fit_3000").in("pet_id", chunk),
+    ]);
+    const scoreById = new Map((scores ?? []).map((s) => [s.pet_id as number, s]));
+    for (const p of pets ?? []) {
+      const s = scoreById.get(p.id as number) as Record<string, number> | undefined;
+      out.set(p.id as number, {
+        name: (p.name as string) ?? null,
+        ownerAddress: (p.owner_address as string)?.toLowerCase() ?? null,
+        rarity: Number(p.rarity ?? 0),
+        elo: p.elo != null ? Number(p.elo) : null,
+        wins: Number(p.wins ?? 0),
+        racesRun: Number(p.races_run ?? 0),
+        cq: Number(s?.confirmed_quality ?? 0),
+        fit: { 500: Number(s?.fit_500 ?? 50), 1200: Number(s?.fit_1200 ?? 50), 2400: Number(s?.fit_2400 ?? 50), 3000: Number(s?.fit_3000 ?? 50) },
+      });
+    }
+  }
+  return out;
+}
+
+// The fit column closest to a race distance, since fit is measured at the four
+// canonical lengths and lobbies can run any distance.
+function nearestFitKey(track: number): number {
+  const keys = [500, 1200, 2400, 3000];
+  return keys.reduce((best, k) => (Math.abs(k - track) < Math.abs(best - track) ? k : best), keys[0]);
+}
+
+function oddsInput(petId: number, s: Strength, track: number) {
+  return { petId, wins: s.wins, racesRun: s.racesRun, elo: s.elo, trackFit: s.fit[nearestFitKey(track)] ?? 50 };
+}
+
+// The single records board, by track, plus the user's edge. wallet ranks all of a
+// roster's top horses; pet scores one horse. Read-only: no wallet signature, only
+// a public address.
+export async function getLobbies(walletParam: string | null, petParam: number | null): Promise<LobbyResponse> {
+  const { lobbies: open, fetchedAt, delayed } = await getOpenLobbies();
+  const wallet = walletParam?.toLowerCase() ?? null;
+
+  // Candidate horses for personalized edge: a single pet, or the roster's top 20 by cq.
+  let candidateIds: number[] = [];
+  if (petParam != null) {
+    candidateIds = [petParam];
+  } else if (wallet) {
+    const { data: roster } = await db()
+      .from("pets").select("id").eq("owner_address", wallet).eq("hatched", true).limit(500);
+    const rosterIds = (roster ?? []).map((r) => r.id as number);
+    if (rosterIds.length) {
+      const cq = await scoresByIds(rosterIds);
+      candidateIds = [...rosterIds].sort((a, b) => (cq.get(b) ?? 0) - (cq.get(a) ?? 0)).slice(0, 20);
+    }
+  }
+  const personalized = candidateIds.length > 0;
+
+  // Resolve strength for every entered horse + the candidates in one batch.
+  const allIds = [...open.flatMap((l) => l.entries.map((e) => e.petId)), ...candidateIds];
+  const strength = await strengthByIds(allIds);
+  const ownerNames = await lookupUsernames([...new Set(open.flatMap((l) => l.entries.map((e) => strength.get(e.petId)?.ownerAddress ?? null)))]);
+  const threshold = await eloThreshold();
+
+  const buildEntrant = (e: OpenLobby["entries"][number]): LobbyEntrant => {
+    const s = strength.get(e.petId);
+    const shrunk = s ? entrantShrunkWinRate(s.wins, s.racesRun) : 0;
+    return {
+      petId: e.petId,
+      name: s?.name ?? null,
+      ownerAddress: e.ownerAddress,
+      ownerName: e.ownerAddress ? ownerNames.get(e.ownerAddress) ?? null : null,
+      rarity: s?.rarity ?? 0,
+      elo: s?.elo ?? null,
+      confirmedQuality: s?.cq ?? 0,
+      isShark: !!s && shrunk >= SHARK_WIN_RATE,
+      juiced: e.juiced,
+      known: !!s,
+    };
+  };
+
+  const rows: LobbyRow[] = open.map((l) => {
+    const entrants = l.entries.map(buildEntrant);
+    const elos = entrants.map((e) => e.elo).filter((x): x is number => x != null);
+    const fieldStrength = {
+      avgElo: elos.length ? Math.round(elos.reduce((a, b) => a + b, 0) / elos.length) : null,
+      sharkCount: entrants.filter((e) => e.isShark).length,
+      topCq: entrants.reduce((m, e) => Math.max(m, e.confirmedQuality), 0),
+    };
+
+    // Personalized edge: add each candidate to the current field, take the win
+    // probability the odds model gives it, keep the best. EV only for paid races.
+    let edge: LobbyEdge | null = null;
+    if (personalized) {
+      const fieldInputs = l.entries.map((e) => { const s = strength.get(e.petId); return s ? oddsInput(e.petId, s, l.trackLength) : null; }).filter((x): x is NonNullable<typeof x> => x != null);
+      const eligible = candidateIds.filter((id) => strength.has(id) && !l.entries.some((e) => e.petId === id));
+      let best: { petId: number; pWin: number } | null = null;
+      for (const id of eligible) {
+        const s = strength.get(id)!;
+        const { results } = computeOdds([...fieldInputs, oddsInput(id, s, l.trackLength)]);
+        const p = results.find((r) => r.petId === id)?.winProbability ?? 0;
+        if (!best || p > best.pWin) best = { petId: id, pWin: p };
+      }
+      if (best) {
+        const fee = Number(l.entryFeeWei || "0");
+        const pool = Number(l.poolWei ?? "0");
+        const firstBps = l.payoutBps[0] ?? 0;
+        const firstPrize = (pool + fee) * (firstBps / 10000);
+        const evWei = fee > 0 || pool > 0 ? String(Math.round(best.pWin * firstPrize - fee)) : null;
+        edge = { petId: best.petId, petName: strength.get(best.petId)?.name ?? null, pWin: best.pWin, evWei, eligibleCount: eligible.length };
+      }
+    }
+
+    return {
+      raceId: l.raceId, trackLength: l.trackLength, raceTemp: l.raceTemp,
+      fieldSize: l.fieldSize, petCount: l.petCount, openSlots: l.openSlots,
+      entryFeeWei: l.entryFeeWei, poolWei: l.poolWei, payoutBps: l.payoutBps,
+      entrants, fieldStrength, edge,
+    };
+  });
+
+  // Rank by the user's win edge when personalized, else newest/most-open first.
+  if (personalized) rows.sort((a, b) => (b.edge?.pWin ?? -1) - (a.edge?.pWin ?? -1));
+
+  return {
+    lobbies: rows,
+    wallet,
+    pet: petParam,
+    personalized,
+    rankedBy: personalized ? "edge" : "open",
+    fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null,
+    delayed,
+    pollMs: POLL_MS,
+    meta: { source: SOURCE, note: LOBBY_NOTE },
+  };
+}

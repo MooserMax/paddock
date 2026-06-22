@@ -10,6 +10,7 @@ import type {
   RecordsResponse,
   RecordMode,
   RecordWindow,
+  LobbyResponse,
   SiteStats,
   RaceListResponse,
   CalibrationResult,
@@ -81,6 +82,8 @@ export const api = {
     apiGet<StableLeaderboardResponse>(`/stables?limit=${limit}&offset=${offset}`, o ?? { revalidate: 120 }),
   records: (track: number | null, mode: RecordMode = "adjusted", window: RecordWindow = "all", limit = 100, offset = 0, o?: FetchOpts) =>
     apiGet<RecordsResponse>(`/records?${track != null ? `track=${track}&` : ""}mode=${mode}&window=${window}&limit=${limit}&offset=${offset}`, o ?? { revalidate: 30 }),
+  lobbies: (wallet?: string | null, pet?: number | null, o?: FetchOpts) =>
+    apiGet<LobbyResponse>(`/lobbies?${wallet ? `wallet=${wallet}&` : ""}${pet != null ? `pet=${pet}&` : ""}`.replace(/[?&]$/, ""), o ?? { revalidate: 0 }),
   stats: (o?: FetchOpts) => apiGet<SiteStats>(`/stats`, o ?? { revalidate: 60 }),
   races: (track?: number | null, limit = 24, offset = 0, o?: FetchOpts) =>
     apiGet<RaceListResponse>(`/races?limit=${limit}&offset=${offset}${track ? `&track=${track}` : ""}`, o ?? { revalidate: 30 }),

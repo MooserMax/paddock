@@ -103,6 +103,7 @@ export interface GigaRace {
   trackLength: number;
   raceStart: number;
   entryFee: string;
+  pool?: string | number;
   creator: string;
   racePets: number[];
   petOwners: Record<string, string>;
