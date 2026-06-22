@@ -1,10 +1,17 @@
+import { decodeAbiParameters } from "viem";
 import { db } from "../db";
 import {
   RACING_START_BLOCK,
   decodeRacingLog,
   fetchRacingLogs,
+  fetchLobbyLogs,
   latestBlock,
   RaceResolved,
+  TOPIC_RACE_CREATED,
+  TOPIC_RACE_CONFIG,
+  TOPIC_RACE_JOINED,
+  TOPIC_RACE_RESOLVED,
+  type RawLog,
 } from "../chain";
 import { fetchRace, sleep, REQUEST_GAP_MS } from "../gigaverse";
 import { getSyncState, setSyncState } from "../syncState";
@@ -364,4 +371,227 @@ export async function catchUpRaces(maxRaces: number, deadline?: number, gapMs: n
   }
 
   return { scanned, inserted, resolved, fromRaceId: startId, reachedRaceId: id - 1, caughtUp: missing >= MISSING_STREAK_LIMIT };
+}
+
+// ---------------------------------------------------------------------------
+// RPC-sourced resolved-race records ingest.
+//
+// The records pipeline (condition-adjusted finish times) needs finish_time_ms,
+// finish order, track_length, field_size, owners and payouts. Every one of those
+// except race_temp is on-chain in the live PetRacingSystem event log, verified by
+// decoding real events against /api/racing/race/{id}:
+//   RACE_RESOLVED -> finishOrder (pet ids, in order) and finishTimesMs
+//   RACE_CONFIG   -> fieldSize, trackLength, creator
+//   RACE_CREATED  -> payoutBps
+//   RACE_JOINED   -> owner per pet
+// So the records-critical numbers come from eth_getLogs in block-range batches
+// (one call covers many races), not a per-race REST fetch, and can never be lost
+// to a 429. race_temp is assigned at race start and is NOT in any event, so it
+// stays a bounded, fault-isolated REST read here, exactly like the lobby fee
+// enrichment. Everything is idempotent (existing rows are re-upserted).
+
+const RESOLVED_RPC_STATE_KEY = "resolved_scan_rpc";
+const RPC_COLD_LOOKBACK = 12_000n; // ~100 min at ~0.5s/block: a safe recent window on a cold start
+const RPC_MAX_WINDOW = 40_000n; // cap blocks scanned per call; fetchLobbyLogs halves on rejection
+const PETRACING_RESOLVED_DATA = [
+  { type: "uint256[]" },
+  { type: "uint256[]" },
+  { type: "uint256[]" },
+  { type: "uint256[]" },
+] as const;
+
+interface RpcRace {
+  raceId: number;
+  fieldSize: number | null;
+  trackLength: number | null;
+  creator: string | null;
+  payoutBps: number[] | null;
+  owners: Map<number, string | null>;
+  finishOrder: number[];
+  finishTimesMs: number[];
+  resolved: boolean;
+}
+
+function topicInt(t: string | undefined): number {
+  return t ? Number(BigInt(t)) : 0;
+}
+function topicAddress(t: string | undefined): string | null {
+  return t ? ("0x" + t.slice(-40)).toLowerCase() : null;
+}
+function configWords(data: string): { fieldSize: number; trackLength: number } {
+  const h = data.startsWith("0x") ? data.slice(2) : data;
+  const word = (i: number) => (h.length >= (i + 1) * 64 ? Number(BigInt("0x" + h.slice(i * 64, i * 64 + 64))) : 0);
+  return { fieldSize: word(0), trackLength: word(1) };
+}
+function createdPayout(data: `0x${string}`): number[] {
+  try {
+    const [bps] = decodeAbiParameters(PETRACING_RESOLVED_DATA, data);
+    return (bps as readonly bigint[]).map((n) => Number(n));
+  } catch {
+    return [];
+  }
+}
+
+function reconstructRaces(logs: RawLog[]): Map<number, RpcRace> {
+  const races = new Map<number, RpcRace>();
+  const get = (raceId: number): RpcRace => {
+    let r = races.get(raceId);
+    if (!r) {
+      r = { raceId, fieldSize: null, trackLength: null, creator: null, payoutBps: null, owners: new Map(), finishOrder: [], finishTimesMs: [], resolved: false };
+      races.set(raceId, r);
+    }
+    return r;
+  };
+  // Order by block then logIndex so config/joins land before resolution.
+  const ordered = [...logs].sort((a, b) => {
+    const ab = Number(BigInt(a.blockNumber)) - Number(BigInt(b.blockNumber));
+    return ab !== 0 ? ab : topicInt((a as unknown as { logIndex?: string }).logIndex) - topicInt((b as unknown as { logIndex?: string }).logIndex);
+  });
+  for (const log of ordered) {
+    const t0 = log.topics[0];
+    const raceId = topicInt(log.topics[1]);
+    if (!raceId) continue;
+    const r = get(raceId);
+    if (t0 === TOPIC_RACE_CONFIG) {
+      const { fieldSize, trackLength } = configWords(log.data);
+      r.fieldSize = fieldSize;
+      r.trackLength = trackLength;
+      r.creator = topicAddress(log.topics[2]);
+    } else if (t0 === TOPIC_RACE_CREATED) {
+      r.payoutBps = createdPayout(log.data as `0x${string}`);
+    } else if (t0 === TOPIC_RACE_JOINED) {
+      const petId = topicInt(log.topics[2]);
+      if (petId) r.owners.set(petId, topicAddress(log.topics[3]));
+    } else if (t0 === TOPIC_RACE_RESOLVED) {
+      const ev = decodeRacingLog(log);
+      if (ev && ev.kind === "resolved") {
+        r.finishOrder = ev.finishOrder.map((n) => Number(n));
+        r.finishTimesMs = ev.finishTimesMs.map((n) => Number(n));
+        r.resolved = true;
+      }
+    }
+  }
+  return races;
+}
+
+export interface ResolvedRpcResult {
+  fromBlock: string;
+  toBlock: string;
+  caughtUp: boolean;
+  resolved: number; // resolved races written from chain logs this run
+  tempEnriched: number; // races that also got race_temp/fees from a bounded REST read
+  tempFailed: number; // bounded REST reads that failed (left for the REST fallback)
+}
+
+// Read RACE_RESOLVED (and the config/created/joined context) forward from a
+// persisted block cursor, write each resolved race's records data from chain, and
+// fill the one off-chain field (race_temp, plus fees) with a bounded, fault-
+// isolated REST read. Gap-free and idempotent: the cursor advances only after a
+// window is written, so a crash re-scans and never skips.
+export async function scanResolvedRacesRpc(opts: { tempBudget: number; deadline?: number } = { tempBudget: 30 }): Promise<ResolvedRpcResult> {
+  const head = await latestBlock();
+  const state = await getSyncState<{ lastBlock: string }>(RESOLVED_RPC_STATE_KEY);
+  const startBlock = state ? BigInt(state.lastBlock) + 1n : (head - RPC_COLD_LOOKBACK > 0n ? head - RPC_COLD_LOOKBACK : 0n);
+  if (startBlock > head) {
+    return { fromBlock: startBlock.toString(), toBlock: head.toString(), caughtUp: true, resolved: 0, tempEnriched: 0, tempFailed: 0 };
+  }
+  const windowEnd = startBlock + RPC_MAX_WINDOW - 1n > head ? head : startBlock + RPC_MAX_WINDOW - 1n;
+
+  const logs = await fetchLobbyLogs(startBlock, windowEnd);
+  const races = reconstructRaces(logs);
+  const resolvedRaces = [...races.values()].filter((r) => r.resolved && r.finishOrder.length > 0);
+
+  let resolved = 0;
+  for (const r of resolvedRaces) {
+    // races row: on-chain fields only here; race_temp/fees come from the bounded
+    // REST pass below. hydrated stays false so the existing REST hydrate is the
+    // fallback if the bounded read does not land.
+    const { error: rErr } = await db().from("races").upsert(
+      {
+        race_id: r.raceId,
+        field_size: r.fieldSize,
+        track_length: r.trackLength,
+        creator: r.creator,
+        payout_bps: r.payoutBps,
+        resolved: true,
+      },
+      { onConflict: "race_id" }
+    );
+    if (rErr) throw new Error(`rpc race upsert failed: ${rErr.message}`);
+
+    const entryRows = r.finishOrder.map((petId, i) => ({
+      race_id: r.raceId,
+      pet_id: petId,
+      owner_address: r.owners.get(petId) ?? null,
+      finish_position: i + 1,
+      finish_time_ms: r.finishTimesMs[i] ?? null,
+    }));
+    if (entryRows.length > 0) {
+      const { error: eErr } = await db().from("race_entries").upsert(entryRows, { onConflict: "race_id,pet_id" });
+      if (eErr) throw new Error(`rpc race_entries upsert failed: ${eErr.message}`);
+    }
+    resolved += 1;
+  }
+
+  // Bounded, fault-isolated REST pass for the off-chain field (race_temp) and the
+  // fee/payout detail not in events. Only resolved races still missing race_temp,
+  // capped, newest first. A failure here never loses the on-chain records data.
+  let tempEnriched = 0;
+  let tempFailed = 0;
+  if (resolvedRaces.length > 0 && opts.tempBudget > 0) {
+    const ids = resolvedRaces.map((r) => r.raceId).sort((a, b) => b - a);
+    const { data: needing } = await db()
+      .from("races").select("race_id")
+      .in("race_id", ids).is("race_temp", null);
+    const needSet = new Set((needing ?? []).map((x) => x.race_id as number));
+    const targets = ids.filter((id) => needSet.has(id)).slice(0, opts.tempBudget);
+    for (const raceId of targets) {
+      if (opts.deadline && Date.now() > opts.deadline) break;
+      try {
+        const race = await fetchRace(raceId);
+        await sleep(REQUEST_GAP_MS);
+        if (!race.success) { tempFailed += 1; continue; }
+        const isResolved = Array.isArray(race.finalRanking) && race.finalRanking.length > 0;
+        const maxFinishMs = isResolved && race.finishTimes.length > 0 ? Math.max(...race.finishTimes) : 0;
+        const { error: tErr } = await db().from("races").update({
+          race_temp: race.raceTemp ?? null,
+          entry_fee_wei: race.entryFee ?? null,
+          field_size: race.fieldSize ?? null,
+          track_length: race.trackLength ?? null,
+          payout_bps: race.payoutBps ?? null,
+          creator: race.creator?.toLowerCase() ?? null,
+          fee_bps: { creator: race.creatorFeeBps, protocol: race.protocolFeeBps, protocolJuiced: race.protocolFeeBpsJuiced, jackpot: race.jackpotBps },
+          race_start: race.raceStart ? new Date(race.raceStart * 1000).toISOString() : null,
+          resolved_at: isResolved ? new Date((race.raceStart + maxFinishMs / 1000) * 1000).toISOString() : null,
+          hydrated: true,
+        }).eq("race_id", raceId);
+        if (tErr) throw new Error(tErr.message);
+        // Backfill owner/payout detail on entries that the events left null.
+        if (isResolved) {
+          const entryRows = race.finalRanking.map((petId, i) => ({
+            race_id: raceId,
+            pet_id: petId,
+            owner_address: race.petOwners[String(petId)]?.toLowerCase() ?? null,
+            finish_position: i + 1,
+            finish_time_ms: race.finishTimes[i] ?? null,
+            payout_wei: race.petPayouts[String(petId)]?.amount ?? null,
+          }));
+          if (entryRows.length > 0) await db().from("race_entries").upsert(entryRows, { onConflict: "race_id,pet_id" });
+        }
+        tempEnriched += 1;
+      } catch {
+        tempFailed += 1; // leave hydrated=false; the existing REST hydrate retries it
+      }
+    }
+  }
+
+  await setSyncState(RESOLVED_RPC_STATE_KEY, { lastBlock: windowEnd.toString() });
+  return {
+    fromBlock: startBlock.toString(),
+    toBlock: windowEnd.toString(),
+    caughtUp: windowEnd >= head,
+    resolved,
+    tempEnriched,
+    tempFailed,
+  };
 }

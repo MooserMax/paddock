@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCron } from "@/lib/cronAuth";
 import { syncEthPrice } from "@/lib/ingest/ethPrice";
-import { catchUpRaces, hydrateRaces } from "@/lib/ingest/races";
+import { catchUpRaces, hydrateRaces, scanResolvedRacesRpc } from "@/lib/ingest/races";
 import { rollingPetSync } from "@/lib/ingest/pets";
 import { materializeScoresFor } from "@/lib/ingest/scores";
 import { materializeStableSkill } from "@/lib/ingest/stableSkill";
@@ -24,7 +24,9 @@ export const maxDuration = 60; // Hobby hard cap. Every path below aims for ~40s
 // across calls via moreRemain rather than run long.
 const MAX_RACES_PER_CALL = 45; // forward catch-up cap: must out-pace race creation
 const CATCHUP_GAP_MS = 300; // race-API polling gap during catch-up (vs 500 default)
-const MAX_HYDRATE_PER_CALL = 36; // open -> resolved per call; ~28 newest out-pace the ~15/cycle finish rate with margin, 8 oldest clear zombies
+const MAX_HYDRATE_PER_CALL = 24; // open -> resolved per call; reduced because the RPC scan now resolves most races from chain, hydrate is the fallback for temp it could not enrich plus zombie cleanup
+const RPC_TEMP_BUDGET = 18; // bounded race_temp/fee REST reads inside the RPC resolved-race scan
+const RPC_DEADLINE_MS = 12_000; // sub-budget for the RPC scan's bounded REST enrichment
 const HYDRATE_GAP_MS = 300; // race-API polling gap during hydration
 const ABANDON_LAG_IDS = 250; // unresolved shells this far below the frontier are abandoned
 const PET_BUDGET = 120; // just-raced pets refreshed (then re-scored) per call
@@ -82,6 +84,18 @@ export async function GET(req: NextRequest) {
       steps.ethPrice = await syncEthPrice();
     } catch (e) {
       steps.ethPriceError = msg(e);
+    }
+
+    // 0. Resolved-race records from the Abstract RPC: finish times, order, track,
+    //    field, owners and payouts come from RACE_RESOLVED/CONFIG/CREATED/JOINED
+    //    logs in one batched eth_getLogs, not a per-race REST fetch, so the records
+    //    spine is unthrottled and gap-free. Only race_temp (off-chain) is filled by
+    //    a small bounded REST read here. Runs first so the records data lands even
+    //    if the REST budget below is tight.
+    try {
+      steps.resolvedRpc = await scanResolvedRacesRpc({ tempBudget: RPC_TEMP_BUDGET, deadline: t0 + RPC_DEADLINE_MS });
+    } catch (e) {
+      steps.resolvedRpcError = msg(e);
     }
 
     // 1. Forward race discovery from our cursor up to the frontier (bounded).
