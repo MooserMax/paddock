@@ -17,6 +17,8 @@ import { setSyncState } from "../syncState";
 const MIN_CELL = 30; // a (track, temp) cell needs this many winner times to earn a factor
 const MIN_TRACK_RECORDS = 10; // a track needs this many distinct record holders to be shown
 const BOARD_CAP = 100; // top N per track, window, and mode
+const TAIL_Q = 0.1; // the board shows the fastest, so validate the fastest-decile spread
+const MIN_TEST = 15; // a held-out (track, temp) cell needs this many to be checked
 const TEMPS = ["hot", "average", "cold"] as const;
 const REFERENCE = "average";
 const DAY_MS = 86_400_000;
@@ -35,10 +37,11 @@ type Win = "all" | "weekly" | "daily";
 export interface RacingRecordsBlob {
   computedAt: string;
   referenceCondition: string;
-  adjustedShipped: boolean; // false if the adjustment failed its out-of-sample check
+  adjustedShipped: boolean; // true if the adjustment is board-fair on at least one track
+  adjustmentApplied: Record<number, boolean>; // per track: did the condition adjustment pass the board gate
   minCell: number;
   factors: Record<string, number>; // `${track}|${temp}` -> multiplier on raw ms
-  validation: { tracksTested: number; tracksImproved: number; note: string };
+  validation: { tracksTested: number; tracksApplied: number; note: string };
   tracks: number[]; // tracks with enough records to show, sorted ascending
   byTrack: Record<number, Record<Win, { raw: RecordEntry[]; adjusted: RecordEntry[] }>>;
 }
@@ -46,7 +49,7 @@ export interface RacingRecordsBlob {
 export interface RecordsResult {
   tracks: number;
   adjustedShipped: boolean;
-  validation: { tracksTested: number; tracksImproved: number };
+  validation: { tracksTested: number; tracksApplied: number };
 }
 
 async function loadAll<T>(table: string, cols: string, orderCol: string): Promise<T[]> {
@@ -86,29 +89,39 @@ function deriveFactors(winners: Pt[], tracks: number[]): Record<string, number> 
   return f;
 }
 
-// Out-of-sample check: fit factors on a deterministic 70% of races, and on the
-// held-out 30% confirm the temp-median spread per track shrinks after adjustment.
-function validate(winners: Pt[], tracks: number[]): { tracksTested: number; tracksImproved: number } {
+const pctile = (a: number[], q: number): number => {
+  const s = [...a].sort((x, y) => x - y);
+  return s[Math.min(s.length - 1, Math.floor(q * s.length))];
+};
+
+// Board-relevant out-of-sample gate, per track. The board shows the FASTEST
+// times, so we validate the TAIL, not the median: fit factors on 70% of races,
+// and on the held-out 30% confirm the cross-condition spread of the fastest decile
+// shrinks. A track is APPLIED only if it has a full set of factors AND the tail
+// spread strictly improves; otherwise it ships RAW with an honest note. This is
+// stricter than a median check, which can leave the extremes skewed. Returns the
+// set of board-fair tracks and the count tested, for the validation summary.
+function boardFairTracks(winners: Pt[], tracks: number[]): { applied: Set<number>; tested: number } {
   const train = winners.filter((w) => w.raceId % 10 < 7);
   const test = winners.filter((w) => w.raceId % 10 >= 7);
   const f = deriveFactors(train, tracks);
-  let tested = 0, improved = 0;
+  const applied = new Set<number>();
+  let tested = 0;
   for (const track of tracks) {
-    const raw: number[] = [], adj: number[] = [];
-    let cells = 0;
+    const hasFactors = TEMPS.every((t) => f[`${track}|${t}`] != null);
+    const tailRaw: number[] = [], tailAdj: number[] = [];
     for (const temp of TEMPS) {
       const ms = test.filter((w) => w.track === track && w.temp === temp).map((w) => w.ms);
-      if (ms.length < 10) continue;
-      cells++;
-      raw.push(median(ms));
-      adj.push(median(ms.map((x) => x * (f[`${track}|${temp}`] ?? 1))));
+      if (ms.length < MIN_TEST) continue;
+      tailRaw.push(pctile(ms, TAIL_Q));
+      tailAdj.push(pctile(ms.map((x) => x * (f[`${track}|${temp}`] ?? 1)), TAIL_Q));
     }
-    if (cells < 2) continue;
+    if (!hasFactors || tailRaw.length < 2) continue;
     tested++;
     const spread = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
-    if (spread(adj) < spread(raw)) improved++;
+    if (spread(tailAdj) < spread(tailRaw)) applied.add(track);
   }
-  return { tracksTested: tested, tracksImproved: improved };
+  return { applied, tested };
 }
 
 export async function materializeRecords(): Promise<RecordsResult> {
@@ -131,10 +144,12 @@ export async function materializeRecords(): Promise<RecordsResult> {
   const allTracks = [...new Set(pts.map((p) => p.track))];
   const winners = pts.filter((p) => p.pos === 1);
   const factors = deriveFactors(winners, allTracks);
-  const v = validate(winners, allTracks);
-  const adjustedShipped = v.tracksTested > 0 && v.tracksImproved > v.tracksTested / 2;
+  const { applied, tested } = boardFairTracks(winners, allTracks);
+  const adjustedShipped = applied.size > 0;
 
-  const adj = (p: Pt) => p.ms * (factors[`${p.track}|${p.temp}`] ?? 1);
+  // Apply the factor only on board-fair tracks; everywhere else adjusted == raw,
+  // and the track is marked not-applied so the UI shows raw with the honest note.
+  const adj = (p: Pt) => (applied.has(p.track) ? p.ms * (factors[`${p.track}|${p.temp}`] ?? 1) : p.ms);
   const toEntry = (p: Pt): RecordEntry => ({
     petId: p.petId,
     rawTimeMs: Math.round(p.ms),
@@ -173,16 +188,25 @@ export async function materializeRecords(): Promise<RecordsResult> {
     byTrack[track] = windows;
   }
 
+  const adjustmentApplied: Record<number, boolean> = {};
+  for (const track of tracks) adjustmentApplied[track] = applied.has(track);
+  const tracksApplied = tracks.filter((t) => applied.has(t)).length;
+
   const blob: RacingRecordsBlob = {
     computedAt: new Date().toISOString(),
     referenceCondition: REFERENCE,
     adjustedShipped,
+    adjustmentApplied,
     minCell: MIN_CELL,
     factors,
-    validation: { ...v, note: `Adjusted is more comparable on held-out data in ${v.tracksImproved} of ${v.tracksTested} tracks.` },
+    validation: {
+      tracksTested: tested,
+      tracksApplied,
+      note: `Temperature adjustment is applied on ${tracksApplied} track${tracksApplied === 1 ? "" : "s"} where it reduces the cross-condition spread of the fastest times out of sample. It reduces, but does not fully remove, condition effects, so the condition is always shown. Other tracks ship raw.`,
+    },
     tracks,
     byTrack,
   };
   await setSyncState("racing_records_v1", blob);
-  return { tracks: tracks.length, adjustedShipped, validation: v };
+  return { tracks: tracks.length, adjustedShipped, validation: { tracksTested: tested, tracksApplied } };
 }

@@ -340,13 +340,30 @@ export interface RecordRow {
   resolvedAt: string | null;
 }
 
+// The single fastest finish in the game, the records-page hero.
+export interface RecordHero {
+  petId: number;
+  name: string | null;
+  rarity: number;
+  ownerName: string | null;
+  ownerAddress: string | null;
+  track: number;
+  timeMs: number;
+  adjusted: boolean; // true if this track's adjustment is applied
+  raceTemp: string;
+  raceId: number;
+}
+
 export interface RecordsResponse {
   track: number;
   mode: RecordMode;
   window: RecordWindow;
-  adjustedAvailable: boolean; // whether the out-of-sample-validated adjustment shipped
+  adjustedAvailable: boolean; // some track has a board-fair adjustment, so the toggle is offered
+  adjustmentApplied: boolean; // the SELECTED track's adjustment passed the board gate
   referenceCondition: string;
   tracks: number[]; // tracks with enough records to show
+  adjustedTracks: number[]; // subset of tracks where the adjustment is applied
+  fastest: RecordHero | null; // the single fastest finish across all tracks
   limit: number;
   offset: number;
   total: number;

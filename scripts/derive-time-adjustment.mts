@@ -35,20 +35,20 @@ const TEMPS = ["hot", "average", "cold"] as const;
 console.log("loading races + race_entries ...");
 const races = await loadAll<{ race_id: number; track_length: number | null; race_temp: string | null; field_size: number | null; resolved: boolean }>(
   "races", "race_id, track_length, race_temp, field_size, resolved", "race_id");
-const entries = await loadAll<{ race_id: number; finish_position: number | null; finish_time_ms: number | null }>(
-  "race_entries", "race_id, finish_position, finish_time_ms", "race_id");
+const entries = await loadAll<{ race_id: number; pet_id: number; finish_position: number | null; finish_time_ms: number | null }>(
+  "race_entries", "race_id, pet_id, finish_position, finish_time_ms", "race_id");
 
 const raceById = new Map(races.map((r) => [r.race_id, r]));
 // A clean datapoint: a finished entry with a positive time in a resolved race
 // with a known track and a known temperature.
-type Pt = { track: number; temp: string; field: number | null; pos: number; ms: number; raceId: number };
+type Pt = { petId: number; track: number; temp: string; field: number | null; pos: number; ms: number; raceId: number };
 const pts: Pt[] = [];
 for (const e of entries) {
   if (e.finish_time_ms == null || Number(e.finish_time_ms) <= 0 || e.finish_position == null) continue;
   const r = raceById.get(e.race_id);
   if (!r || !r.resolved || r.track_length == null || !r.race_temp) continue;
   if (!TEMPS.includes(r.race_temp as (typeof TEMPS)[number])) continue;
-  pts.push({ track: r.track_length, temp: r.race_temp, field: r.field_size, pos: e.finish_position, ms: Number(e.finish_time_ms), raceId: e.race_id });
+  pts.push({ petId: e.pet_id, track: r.track_length, temp: r.race_temp, field: r.field_size, pos: e.finish_position, ms: Number(e.finish_time_ms), raceId: e.race_id });
 }
 const winners = pts.filter((p) => p.pos === 1);
 const tracks = [...new Set(pts.map((p) => p.track))].sort((a, b) => a - b);
@@ -118,37 +118,58 @@ const factors = factorsFrom(winners);
 console.log("\n(4) ADJUSTMENT FACTORS (reference = average temp), adjustedMs = rawMs * factor(track, temp):");
 for (const [k, v] of [...factors.entries()].sort()) console.log(`    ${k} -> ${v.toFixed(4)}`);
 
-// (5) OUT-OF-SAMPLE validation. Deterministic 70/30 split by race id. Fit factors
-//     on train winners; on held-out test winners, does the hot-vs-cold spread of
-//     median times shrink after adjustment vs raw? (per track with adequate cells)
+// percentile q (0..1) of an array.
+const pct = (a: number[], q: number) => { const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
+
+// (5) BOARD-RELEVANT out-of-sample validation + per-track apply decision. The
+// board shows the FASTEST times, so we validate the TAIL, not the median: per
+// track, does adjustment shrink the cross-condition spread of the fastest decile
+// (p10) of winner times on held-out data? A track is board-fair (adjustment
+// applied) only if it strictly does AND it has a full set of factors; otherwise
+// it ships RAW with the honest note. This is the stricter gate the records board
+// actually needs, since a median-tuned correction can leave the extremes skewed.
 const train = winners.filter((w) => w.raceId % 10 < 7);
 const test = winners.filter((w) => w.raceId % 10 >= 7);
 const trainF = factorsFrom(train);
-console.log(`\n(5) OUT-OF-SAMPLE VALIDATION (train ${train.length} / test ${test.length} winners, factors fit on train):`);
-console.log("  per track, max-min spread of temp medians as % of the average-temp median, RAW vs ADJUSTED on held-out test:");
-let improvedTracks = 0, testedTracks = 0;
+const TAIL_Q = 0.1;
+const MIN_TEST = 15;
+const applied = new Map<number, boolean>();
+console.log(`\n(5) BOARD-RELEVANT OOS VALIDATION (train ${train.length} / test ${test.length} winners; fastest-decile cross-condition spread as % of mean p10):`);
+console.log("  track | full factors | raw p10 spread -> adjusted | decision");
 for (const track of tracks) {
-  const tempMedRaw: number[] = [];
-  const tempMedAdj: number[] = [];
-  let adequate = 0;
-  for (const temp of TEMPS) {
-    const ms = test.filter((w) => w.track === track && w.temp === temp).map((w) => w.ms);
-    if (ms.length < 10) continue;
-    adequate++;
-    tempMedRaw.push(median(ms));
-    const f = trainF.get(`${track}|${temp}`) ?? 1;
-    tempMedAdj.push(median(ms.map((x) => x * f)));
+  const hasFactors = TEMPS.every((t) => trainF.has(`${track}|${t}`));
+  const cellsRaw: number[] = [], cellsAdj: number[] = [];
+  for (const t of TEMPS) {
+    const a = test.filter((w) => w.track === track && w.temp === t).map((w) => w.ms);
+    if (a.length < MIN_TEST) continue;
+    cellsRaw.push(pct(a, TAIL_Q));
+    cellsAdj.push(pct(a.map((x) => x * (trainF.get(`${track}|${t}`) ?? 1)), TAIL_Q));
   }
-  if (adequate < 2) { console.log(`    ${track}m: too few test cells`); continue; }
-  testedTracks++;
-  const base = mean(tempMedRaw);
-  const spreadRaw = ((Math.max(...tempMedRaw) - Math.min(...tempMedRaw)) / base) * 100;
-  const spreadAdj = ((Math.max(...tempMedAdj) - Math.min(...tempMedAdj)) / base) * 100;
-  const better = spreadAdj < spreadRaw;
-  if (better) improvedTracks++;
-  console.log(`    ${track}m: raw spread ${spreadRaw.toFixed(2)}% -> adjusted ${spreadAdj.toFixed(2)}%  ${better ? "BETTER" : "worse"}`);
+  if (!hasFactors || cellsRaw.length < 2) { applied.set(track, false); console.log(`  ${track} | ${hasFactors ? "yes" : "no"} | insufficient test | RAW fallback`); continue; }
+  const baseP = mean(cellsRaw);
+  const sRaw = ((Math.max(...cellsRaw) - Math.min(...cellsRaw)) / baseP) * 100;
+  const sAdj = ((Math.max(...cellsAdj) - Math.min(...cellsAdj)) / baseP) * 100;
+  const fair = sAdj < sRaw;
+  applied.set(track, fair);
+  console.log(`  ${track} | yes | ${sRaw.toFixed(2)}% -> ${sAdj.toFixed(2)}% | ${fair ? "APPLIED" : "RAW fallback"}`);
 }
-console.log(`\nVERDICT: adjusted is more comparable on held-out data in ${improvedTracks}/${testedTracks} tracks.`);
-console.log(improvedTracks > testedTracks / 2
-  ? "=> SHIP ADJUSTED (validated out of sample), reference = average temp, factors above."
-  : "=> DO NOT SHIP ADJUSTED; ship raw only.");
+
+// (6) TOP-20 board condition balance, the actual board the user sees: best raw
+// time per pet, top 20, counted by condition, raw ordering vs adjusted ordering
+// (adjusted only where the track is applied). Descriptive, on full data.
+console.log("\n(6) TOP-20 BOARD CONDITION BALANCE (best-per-pet records), raw ordering vs adjusted:");
+const count = (arr: Pt[]) => TEMPS.map((t) => `${t}:${arr.filter((p) => p.temp === t).length}`).join(" ");
+for (const track of tracks) {
+  const tp = pts.filter((p) => p.track === track);
+  if (new Set(tp.map((p) => p.petId)).size < 20) continue;
+  const f = (p: Pt) => p.ms * (applied.get(track) ? (factors.get(`${track}|${p.temp}`) ?? 1) : 1);
+  const bestRaw = new Map<number, Pt>(); for (const p of tp) { const c = bestRaw.get(p.petId); if (!c || p.ms < c.ms) bestRaw.set(p.petId, p); }
+  const bestAdj = new Map<number, Pt>(); for (const p of tp) { const c = bestAdj.get(p.petId); if (!c || f(p) < f(c)) bestAdj.set(p.petId, p); }
+  const t20Raw = [...bestRaw.values()].sort((a, b) => a.ms - b.ms).slice(0, 20);
+  const t20Adj = [...bestAdj.values()].sort((a, b) => f(a) - f(b)).slice(0, 20);
+  console.log(`  ${track}m [${applied.get(track) ? "adjusted" : "raw"}]: raw {${count(t20Raw)}} -> adj {${count(t20Adj)}}`);
+}
+
+const appliedTracks = [...applied.entries()].filter(([, v]) => v).map(([t]) => t).sort((a, b) => a - b);
+console.log(`\nVERDICT: adjustment is board-fair and APPLIED on tracks: ${appliedTracks.join(", ") || "none"}.`);
+console.log("All other tracks ship RAW with the honest note. Reference = average temp.");

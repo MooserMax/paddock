@@ -33,17 +33,27 @@ export default async function Image({ params }: { params: { id: string } }) {
     { label: "FINISH", ...d.stats.finish },
   ];
 
+  // The horse's best record standing (top 10 at any distance), the share brag.
+  const topRecord = d.records
+    .map((r) => ({ ...r, rank: r.bestAdjustedMs != null ? r.adjustedRank : r.rawRank, adjusted: r.bestAdjustedMs != null, timeMs: r.bestAdjustedMs ?? r.bestRawMs }))
+    .filter((r) => r.rank != null && r.rank <= 10 && r.timeMs != null)
+    .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))[0] ?? null;
+  const recordLine = topRecord
+    ? `${topRecord.rank === 1 ? "fastest" : `#${topRecord.rank} fastest`} ${topRecord.track}m in Gigaverse, ${(topRecord.timeMs! / 1000).toFixed(2)}s ${topRecord.adjusted ? "adjusted" : "raw"}, ${topRecord.raceTemp}`
+    : null;
+
   return new ImageResponse(
     (
       <div style={{ ...ogBackground, width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: 64, color: OG_COLORS.ink, fontFamily: "Crimson Pro" }}>
         {/* header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ color: OG_COLORS.brick, fontSize: 30 }}>✳</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {/* Drawn coral diamond brand mark, no font glyph (satori has no U+2733). */}
+            <div style={{ display: "flex", width: 22, height: 22, background: OG_COLORS.glow, borderRadius: 4, transform: "rotate(45deg)" }} />
             <span style={{ fontSize: 30 }}>Paddock</span>
           </div>
           <span style={{ fontFamily: "JetBrains Mono", fontSize: 20, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
-            Gigling dossier
+            {recordLine ? "Racing record" : "Gigling dossier"}
           </span>
         </div>
 
@@ -57,6 +67,13 @@ export default async function Image({ params }: { params: { id: string } }) {
         <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkSoft, marginTop: 6 }}>
           {d.faction.name} · {Math.round(d.revealPct * 100)}% revealed
         </span>
+
+        {/* Record brag banner, when the horse holds a top record at any distance */}
+        {recordLine && (
+          <div style={{ display: "flex", marginTop: 16, padding: "10px 16px", borderRadius: 10, border: `1px solid ${OG_COLORS.glow}`, background: "rgba(232,105,79,0.12)" }}>
+            <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.glow, textTransform: "uppercase", letterSpacing: 1 }}>{recordLine}</span>
+          </div>
+        )}
 
         {/* the four stat range bars (signature motif) */}
         <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 30 }}>

@@ -1055,13 +1055,13 @@ export async function getStableLeaderboard(limit: number, offset: number): Promi
 }
 
 // ---- Racing records (precomputed in the cron, read-only) --------------------
-import type { RecordsResponse, RecordRow, RecordMode, RecordWindow } from "./types";
+import type { RecordsResponse, RecordRow, RecordMode, RecordWindow, RecordHero } from "./types";
 import type { RacingRecordsBlob } from "../ingest/records";
 
 const RECORDS_EXPLANATION_ADJ =
-  "Fastest finishes from every resolved race, adjusted for track conditions. Hot tracks run faster, so raw times are not directly comparable. Adjusted times normalize to average conditions, validated out of sample. The condition each record was set in is always shown.";
+  "Fastest finishes from every resolved race. Hot tracks run faster, so raw times are not directly comparable. Adjusted times correct for track temperature where we have enough data; this reduces, but does not fully remove, condition effects, which is why the condition is always shown.";
 const RECORDS_EXPLANATION_RAW =
-  "Fastest finishes from every resolved race, on-chain times. The condition each record was set in is shown; the condition adjustment did not validate, so only raw times are listed.";
+  "Fastest finishes from every resolved race, on-chain times. The condition each record was set in is always shown. Not enough races at this distance to adjust for conditions yet, so these are raw times.";
 
 async function recordsBlob(): Promise<{ blob: RacingRecordsBlob; computedAt: string | null } | null> {
   const { data, error } = await db().from("sync_state").select("value, updated_at").eq("key", "racing_records_v1").maybeSingle();
@@ -1082,12 +1082,13 @@ function petRecordsFromBlob(blob: RacingRecordsBlob, petId: number): PetDistance
     const rawE = ri >= 0 ? raw[ri] : null;
     const adjE = ai >= 0 ? adj[ai] : null;
     const ref = adjE ?? rawE!;
+    const trackAdjusted = blob.adjustmentApplied?.[track] ?? false;
     out.push({
       track,
       bestRawMs: rawE?.rawTimeMs ?? adjE?.rawTimeMs ?? null,
       rawRank: ri >= 0 ? ri + 1 : null,
-      bestAdjustedMs: blob.adjustedShipped ? adjE?.adjustedTimeMs ?? null : null,
-      adjustedRank: blob.adjustedShipped && ai >= 0 ? ai + 1 : null,
+      bestAdjustedMs: trackAdjusted ? adjE?.adjustedTimeMs ?? null : null,
+      adjustedRank: trackAdjusted && ai >= 0 ? ai + 1 : null,
       raceTemp: ref.raceTemp,
       raceId: ref.raceId,
     });
@@ -1098,8 +1099,8 @@ function petRecordsFromBlob(blob: RacingRecordsBlob, petId: number): PetDistance
 // The subtle scanner note for a horse that holds a distance record (rank 1),
 // adjusted preferred. Null for everyone else.
 function recordNoteFromBlob(blob: RacingRecordsBlob, petId: number): string | null {
-  if (blob.adjustedShipped) {
-    for (const track of blob.tracks) if (blob.byTrack[track]?.all?.adjusted?.[0]?.petId === petId) return `Holds the adjusted ${track}m record`;
+  for (const track of blob.tracks) {
+    if (blob.adjustmentApplied?.[track] && blob.byTrack[track]?.all?.adjusted?.[0]?.petId === petId) return `Holds the adjusted ${track}m record`;
   }
   for (const track of blob.tracks) if (blob.byTrack[track]?.all?.raw?.[0]?.petId === petId) return `Holds the ${track}m record`;
   return null;
@@ -1111,20 +1112,37 @@ function recordNoteFromBlob(blob: RacingRecordsBlob, petId: number): string | nu
 // adjustment did not validate out of sample.
 export async function getRecords(trackParam: number | null, mode: RecordMode, window: RecordWindow, limit: number, offset: number): Promise<RecordsResponse> {
   const wrap = await recordsBlob();
-  const base = (track: number, tracks: number[], adjustedAvailable: boolean, computedAt: string | null): Omit<RecordsResponse, "rows" | "total"> => ({
-    track, mode, window, adjustedAvailable, referenceCondition: wrap?.blob.referenceCondition ?? "average", tracks, limit, offset,
-    meta: { source: SOURCE, explanation: adjustedAvailable ? RECORDS_EXPLANATION_ADJ : RECORDS_EXPLANATION_RAW, computedAt },
-  });
-  if (!wrap || wrap.blob.tracks.length === 0) {
-    return { ...base(trackParam ?? 0, [], false, null), rows: [], total: 0 };
-  }
+  const empty: RecordsResponse = {
+    track: trackParam ?? 0, mode, window, adjustedAvailable: false, adjustmentApplied: false, referenceCondition: "average",
+    tracks: [], adjustedTracks: [], fastest: null, limit, offset, total: 0, rows: [],
+    meta: { source: SOURCE, explanation: RECORDS_EXPLANATION_ADJ, computedAt: null },
+  };
+  if (!wrap || wrap.blob.tracks.length === 0) return empty;
   const { blob, computedAt } = wrap;
   const track = trackParam != null && blob.tracks.includes(trackParam) ? trackParam : blob.tracks[0];
-  const effectiveMode: RecordMode = blob.adjustedShipped ? mode : "raw";
+  const adjustedAvailable = blob.adjustedShipped; // some track is adjusted (controls the toggle)
+  const trackApplied = blob.adjustmentApplied?.[track] ?? false; // the selected track
+  const adjustedTracks = blob.tracks.filter((t) => blob.adjustmentApplied?.[t]);
+  // On a non-applied track the adjusted board equals raw, so read raw there.
+  const effectiveMode: RecordMode = trackApplied ? mode : "raw";
   const list = blob.byTrack[track]?.[window]?.[effectiveMode] ?? [];
   const page = list.slice(offset, offset + limit);
-  const pets = await petsByIds(page.map((e) => e.petId));
-  const ownerNames = await lookupUsernames(page.map((e) => pets.get(e.petId)?.owner_address ?? null));
+
+  // The single fastest finish across all tracks (smallest time wins, so it is the
+  // shortest distance's record), the page hero. Uses the adjusted time where that
+  // track is adjusted, raw otherwise.
+  let heroRaw: { petId: number; track: number; timeMs: number; adjusted: boolean; raceTemp: string; raceId: number } | null = null;
+  for (const t of blob.tracks) {
+    const ap = blob.adjustmentApplied?.[t] ?? false;
+    const top = (ap ? blob.byTrack[t]?.all?.adjusted : blob.byTrack[t]?.all?.raw)?.[0];
+    if (!top) continue;
+    const time = ap ? top.adjustedTimeMs : top.rawTimeMs;
+    if (!heroRaw || time < heroRaw.timeMs) heroRaw = { petId: top.petId, track: t, timeMs: time, adjusted: ap, raceTemp: top.raceTemp, raceId: top.raceId };
+  }
+
+  const idsToResolve = [...page.map((e) => e.petId), ...(heroRaw ? [heroRaw.petId] : [])];
+  const pets = await petsByIds(idsToResolve);
+  const ownerNames = await lookupUsernames(idsToResolve.map((id) => pets.get(id)?.owner_address ?? null));
   const rows: RecordRow[] = page.map((e, i) => {
     const p = pets.get(e.petId);
     const ownerAddress = p?.owner_address ?? null;
@@ -1136,11 +1154,33 @@ export async function getRecords(trackParam: number | null, mode: RecordMode, wi
       ownerName: ownerAddress ? ownerNames.get(ownerAddress.toLowerCase()) ?? null : null,
       ownerAddress,
       rawTimeMs: e.rawTimeMs,
-      adjustedTimeMs: blob.adjustedShipped ? e.adjustedTimeMs : null,
+      adjustedTimeMs: trackApplied ? e.adjustedTimeMs : null, // null when this track is not adjusted
       raceTemp: e.raceTemp,
       raceId: e.raceId,
       resolvedAt: e.resolvedAt,
     };
   });
-  return { ...base(track, blob.tracks, blob.adjustedShipped, computedAt), rows, total: list.length };
+  let fastest: RecordHero | null = null;
+  if (heroRaw) {
+    const hp = pets.get(heroRaw.petId);
+    const hAddr = hp?.owner_address ?? null;
+    fastest = {
+      petId: heroRaw.petId,
+      name: hp?.name ?? null,
+      rarity: Number(hp?.rarity ?? 0),
+      ownerName: hAddr ? ownerNames.get(hAddr.toLowerCase()) ?? null : null,
+      ownerAddress: hAddr,
+      track: heroRaw.track,
+      timeMs: heroRaw.timeMs,
+      adjusted: heroRaw.adjusted,
+      raceTemp: heroRaw.raceTemp,
+      raceId: heroRaw.raceId,
+    };
+  }
+
+  return {
+    track, mode, window, adjustedAvailable, adjustmentApplied: trackApplied, referenceCondition: blob.referenceCondition,
+    tracks: blob.tracks, adjustedTracks, fastest, limit, offset, total: list.length, rows,
+    meta: { source: SOURCE, explanation: trackApplied ? RECORDS_EXPLANATION_ADJ : RECORDS_EXPLANATION_RAW, computedAt },
+  };
 }

@@ -79,8 +79,9 @@ export default async function Image({ params }: { params: { address: string } })
       <div style={{ ...ogBackground, width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: 64, color: OG_COLORS.ink, fontFamily: "Crimson Pro" }}>
         {/* Brand row */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ color: OG_COLORS.glow, fontSize: 34 }}>✳</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {/* Drawn coral diamond brand mark, no font glyph (satori has no U+2733). */}
+            <div style={{ display: "flex", width: 24, height: 24, background: OG_COLORS.glow, borderRadius: 4, transform: "rotate(45deg)" }} />
             <span style={{ fontSize: 34 }}>Paddock</span>
           </div>
           <span style={{ fontFamily: "JetBrains Mono", fontSize: 20, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
@@ -124,7 +125,7 @@ export default async function Image({ params }: { params: { address: string } })
             </div>
           ) : (
             <div style={{ display: "flex", width: 250, height: 250, alignItems: "center", justifyContent: "center", borderRadius: 18, border: `2px solid ${OG_COLORS.line}` }}>
-              <span style={{ color: OG_COLORS.glow, fontSize: 90 }}>✳</span>
+              <div style={{ display: "flex", width: 70, height: 70, background: OG_COLORS.glow, borderRadius: 10, transform: "rotate(45deg)" }} />
             </div>
           )}
         </div>
