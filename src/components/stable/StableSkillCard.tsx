@@ -1,6 +1,7 @@
+import Link from "next/link";
 import Panel from "@/components/ui/Panel";
 import type { StableSkill } from "@/lib/api/types";
-import { stableStanding, formatInt } from "@/lib/format";
+import { stableStanding, formatInt, formatScore, formatHorsePercentile } from "@/lib/format";
 
 // The stable-skill card on the stable report. Leads with standing (rank, or a
 // percentile near the very top), with a rank progress bar so a user reads their
@@ -59,6 +60,17 @@ export default function StableSkillCard({ skill }: { skill: StableSkill }) {
       <p className="type-micro mt-2 normal-case text-ink-faint">
         Based on {formatInt(skill.provenCount)} proven horses of {formatInt(skill.totalHorses)} total.
       </p>
+      {skill.topPetId != null && skill.topPetCq != null && (
+        <p className="type-micro mt-1 normal-case text-ink-faint">
+          Best horse{" "}
+          <Link href={`/pet/${skill.topPetId}`} className="text-ink-soft transition-paddock hover:text-glow">#{skill.topPetId}</Link>
+          , quality {formatScore(skill.topPetCq)}
+          {skill.topPetPercentile != null ? (
+            <span style={{ color: "var(--glow)" }}>, {formatHorsePercentile(skill.topPetPercentile)} in the game</span>
+          ) : null}
+          .
+        </p>
+      )}
     </Panel>
   );
 }

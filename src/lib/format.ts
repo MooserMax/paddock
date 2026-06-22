@@ -48,6 +48,16 @@ export function stableStanding(percentile: number | null | undefined, rank: numb
   return `Rank ${rank} of ${total}`;
 }
 
+// A single horse's confirmed-quality standing in the whole game, e.g. "top 0.1%".
+// Anchors the raw cq to its real percentile so an elite number is not misread as
+// mediocre, with no assumed maximum. fraction is a small value like 0.001.
+export function formatHorsePercentile(fraction: number | null | undefined): string | null {
+  if (fraction == null || !Number.isFinite(fraction)) return null;
+  const x = fraction * 100;
+  const s = x < 1 ? Number(x.toFixed(2)).toString() : String(Math.round(x));
+  return `top ${s}%`;
+}
+
 export function formatScore(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "unknown";
   return value.toFixed(1);

@@ -137,6 +137,8 @@ export interface StableSkill {
   avgProvenCq: number | null;
   eligibleTotal: number; // number of ranked stables, the percentile denominator
   topPetId: number | null; // highest-cq proven horse, the share-card anchor
+  topPetCq: number | null; // that horse's confirmed quality
+  topPetPercentile: number | null; // that horse's standing in the full population (e.g. 0.001 = top 0.1%)
 }
 
 export interface WalletSummary {

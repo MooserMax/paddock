@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 import { getWalletSummary } from "@/lib/api/queries";
-import { ownerDisplay, stableStanding } from "@/lib/format";
+import { ownerDisplay, stableStanding, formatHorsePercentile } from "@/lib/format";
 import { OG_SIZE, OG_COLORS, ogBackground, ogFonts } from "@/lib/og";
 
 export const runtime = "nodejs";
@@ -94,9 +94,16 @@ export default async function Image({ params }: { params: { address: string } })
               <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 2, marginBottom: 10 }}>Top horse</span>
               <img src={horseArt} width={250} height={250} style={{ borderRadius: 18, border: `2px solid ${OG_COLORS.line}` }} alt="" />
               {topHorse && ranked && (
-                <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkSoft, marginTop: 12 }}>
-                  #{topHorse.id} · {topHorse.confirmedQuality.toFixed(1)}
-                </span>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 12 }}>
+                  <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkSoft }}>
+                    #{topHorse.id} · {topHorse.confirmedQuality.toFixed(1)}
+                  </span>
+                  {skill?.topPetPercentile != null && (
+                    <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.glow, textTransform: "uppercase", letterSpacing: 1, marginTop: 4 }}>
+                      {formatHorsePercentile(skill.topPetPercentile)} in the game
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           ) : (
