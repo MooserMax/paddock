@@ -194,6 +194,7 @@ export interface RaceEntrantDTO {
   name: string | null;
   ownerAddress: string | null;
   finishPosition: number | null;
+  timeMs: number | null; // on-chain finish time in ms, null for unresolved or lobby scans
   shrunkWinRate: number;
   rawWinRate: number | null;
   wins: number;

@@ -407,7 +407,7 @@ export async function getRaceDetail(id: number, markedPetId?: number): Promise<R
 
   const { data: entries } = await db()
     .from("race_entries")
-    .select("pet_id, owner_address, finish_position")
+    .select("pet_id, owner_address, finish_position, finish_time_ms")
     .eq("race_id", id)
     .order("finish_position", { ascending: true });
 
@@ -441,6 +441,7 @@ export async function getRaceDetail(id: number, markedPetId?: number): Promise<R
       name: (p.name as string) ?? null,
       ownerAddress: (e.owner_address as string) ?? (p.owner_address as string) ?? null,
       finishPosition: e.finish_position ?? null,
+      timeMs: e.finish_time_ms != null ? Number(e.finish_time_ms) : null,
       shrunkWinRate: shrunk,
       rawWinRate: racesRun ? wins / racesRun : null,
       wins,
@@ -925,6 +926,7 @@ export async function getScan(petIds: number[], trackLength: number, markedPetId
       name: (p.name as string) ?? null,
       ownerAddress: (p.owner_address as string) ?? null,
       finishPosition: null,
+      timeMs: null,
       shrunkWinRate: shrunk,
       rawWinRate: racesRun ? wins / racesRun : null,
       wins,
