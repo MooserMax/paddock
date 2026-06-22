@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import type { LobbyResponse, LobbyRow } from "@/lib/api/types";
 import RarityBadge from "@/components/RarityBadge";
-import { formatPct, formatEth, formatInt } from "@/lib/format";
+import { formatEth, formatInt } from "@/lib/format";
 
 // The live, ranked decision board. Polls /api/v1/lobbies on the polite interval
 // (the server cache fans one upstream poll out to all viewers), updates in place
@@ -141,15 +141,18 @@ function LobbyCard({ lobby: l, personalized }: { lobby: LobbyRow; personalized: 
           <span className="type-micro uppercase text-ink-faint">{fee > 0 ? `${formatEth(fee / 1e18, 4)} entry` : "free race"}</span>
         </div>
 
-        {/* Your edge, the headline differentiator */}
+        {/* Your edge, the headline differentiator. An honest band, never a
+            false-precise percent, with the uncalibrated qualifier alongside it. */}
         {personalized && l.edge && (
           <div className="text-right">
-            <p className="type-section tabular-nums" style={{ color: "var(--glow)" }}>{formatPct(l.edge.pWin)}</p>
+            <p className="type-card-title" style={{ color: "var(--glow)" }}>{l.edge.band}</p>
             <p className="type-micro normal-case text-ink-faint">
-              your win odds with{" "}
+              with{" "}
               <Link href={`/pet/${l.edge.petId}`} className="transition-paddock hover:text-glow">{l.edge.petName ?? `#${l.edge.petId}`}</Link>
-              {evEth != null ? `, EV ${formatEth(evEth, 4)}` : ""}
+              {", "}{l.edge.bandRange}
+              {evEth != null ? `, EV est ${formatEth(evEth, 4)}` : ""}
             </p>
+            <p className="type-micro normal-case text-ink-faint">estimate, not yet calibrated at these odds</p>
           </div>
         )}
         {personalized && !l.edge && (
@@ -175,7 +178,7 @@ function LobbyCard({ lobby: l, personalized }: { lobby: LobbyRow; personalized: 
 
       <p className="type-micro mt-2 normal-case text-ink-faint">
         Field strength: {l.fieldStrength.sharkCount} shark{l.fieldStrength.sharkCount === 1 ? "" : "s"}, avg ELO {l.fieldStrength.avgElo ?? "unknown"}, top quality {formatInt(l.fieldStrength.topCq)}.
-        {personalized && l.edge ? " This race is forming, so your odds shift as horses enter; this is a calibrated estimate, not a guarantee." : ""}
+        {personalized && l.edge ? " This race is forming, so your odds shift as horses enter, and the estimate is not yet calibrated at these odds, so treat the band as a guide, not a guarantee." : ""}
       </p>
     </div>
   );

@@ -340,8 +340,11 @@ export interface LobbyEntrant {
 export interface LobbyEdge {
   petId: number;
   petName: string | null;
-  pWin: number; // your win probability if the field stays as-is, calibrated estimate
-  evWei: string | null; // expected value in wei, null for free races (no monetary EV)
+  pWin: number; // raw model win probability, used for ranking; uncalibrated, do not render as a precise percent
+  band: string; // honest banded label for display, e.g. "Heavy favorite" (see pWinBand)
+  bandRange: string; // coarse range text for the band, e.g. "best in this field"
+  calibrated: boolean; // always false here: the live model's ELO/fit signals are not validated at these odds
+  evWei: string | null; // estimated value in wei from the capped pWin, null for free races; an estimate, not a precise figure
   eligibleCount: number; // how many of your horses could enter this lobby
 }
 

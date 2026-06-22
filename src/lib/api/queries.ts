@@ -2,6 +2,7 @@ import { db } from "../db";
 import { lookupUsername, lookupUsernames } from "../accounts";
 import { FRESH_RANGE_WIDTH } from "../scoring/constants";
 import { computeOdds } from "../scoring/odds";
+import { pWinBand, PWIN_CEILING } from "../format";
 import { computeVerdict, SHARK_WIN_RATE, entrantShrunkWinRate } from "../scoring/verdict";
 import { traitMeta, rarityDisplay } from "../display";
 import type {
@@ -1314,8 +1315,12 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
         const pool = Number(l.poolWei ?? "0");
         const firstBps = l.payoutBps[0] ?? 0;
         const firstPrize = (pool + fee) * (firstBps / 10000);
-        const evWei = fee > 0 || pool > 0 ? String(Math.round(best.pWin * firstPrize - fee)) : null;
-        edge = { petId: best.petId, petName: strength.get(best.petId)?.name ?? null, pWin: best.pWin, evWei, eligibleCount: eligible.length };
+        // EV uses the CAPPED probability so it never inherits the uncalibrated
+        // overconfident tail (a raw 0.9997 would fabricate a precise EV).
+        const pForEv = Math.min(best.pWin, PWIN_CEILING);
+        const evWei = fee > 0 || pool > 0 ? String(Math.round(pForEv * firstPrize - fee)) : null;
+        const b = pWinBand(best.pWin);
+        edge = { petId: best.petId, petName: strength.get(best.petId)?.name ?? null, pWin: best.pWin, band: b.label, bandRange: b.range, calibrated: false, evWei, eligibleCount: eligible.length };
       }
     }
 

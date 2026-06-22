@@ -31,6 +31,25 @@ export function formatPct(fraction: number | null | undefined, places = 0): stri
   return `${(fraction * 100).toFixed(places)}%`;
 }
 
+// Win probability is an honest band, never a false-precise percent. The live odds
+// model adds ELO and stat-fit signals that Paddock cannot validate out of sample
+// (they are current-only and would leak past outcomes), so absolute probabilities
+// are uncalibrated, and the held-out win-rate curve is itself overconfident in the
+// tail: a predicted 0.95 hits ~0.77 in reality. So we cap the display: the strongest
+// favorite reads "Heavy favorite", never "99.97%". Ordering still uses the raw
+// number; only the rendered magnitude is banded. PWIN_CEILING is the empirical
+// actual-win-frequency ceiling from the calibration buckets.
+export const PWIN_CEILING = 0.8;
+
+export function pWinBand(p: number | null | undefined): { label: string; range: string } {
+  if (p === null || p === undefined || !Number.isFinite(p)) return { label: "unknown", range: "not enough to estimate" };
+  if (p >= 0.62) return { label: "Heavy favorite", range: "best in this field" };
+  if (p >= 0.45) return { label: "Favored", range: "roughly 45 to 65%" };
+  if (p >= 0.25) return { label: "Live contender", range: "roughly 25 to 45%" };
+  if (p >= 0.1) return { label: "In the mix", range: "roughly 10 to 25%" };
+  return { label: "Long shot", range: "under 10%" };
+}
+
 export function formatInt(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "unknown";
   return Math.round(value).toLocaleString("en-US");
