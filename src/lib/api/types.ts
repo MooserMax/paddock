@@ -138,7 +138,8 @@ export interface StableSkill {
   eligibleTotal: number; // number of ranked stables, the percentile denominator
   topPetId: number | null; // highest-cq proven horse, the share-card anchor
   topPetCq: number | null; // that horse's confirmed quality
-  topPetPercentile: number | null; // that horse's standing in the full population (e.g. 0.001 = top 0.1%)
+  topPetPercentile: number | null; // exact fraction of all horses with cq >= it (e.g. 0.0003 = top 0.03%)
+  topPetIsBest: boolean; // true only if it is the single highest-cq horse in the game
 }
 
 export interface WalletSummary {

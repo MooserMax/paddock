@@ -12,12 +12,14 @@ export default function ShareStable({ address, skill }: { address: string; skill
   const [copied, setCopied] = useState(false);
 
   const url = typeof window !== "undefined" ? `${window.location.origin}/wallet/${address}` : `/wallet/${address}`;
-  // Brag a percentile only when genuinely top quartile; otherwise a neutral line,
-  // so a low-ranked stable never posts an awkward "rank 197 of 197".
+  // Rank 1 brags as the best; the rest of the top brags its standing; lower ranks
+  // post a neutral line so nothing awkward (or a rank that misreads) goes out.
   const text =
-    skill.state === "ranked" && skill.percentile != null && skill.percentile <= 0.25
-      ? `My Gigling stable is ${stableStanding(skill.percentile, skill.rank, skill.eligibleTotal)} by proven roster quality on Paddock. Check yours:`
-      : "My Gigling stable on Paddock. Check yours:";
+    skill.state === "ranked" && skill.rank === 1
+      ? "My Gigling stable is the #1 stable in Gigaverse by proven roster quality on Paddock. Check yours:"
+      : skill.state === "ranked" && skill.percentile != null && skill.percentile <= 0.25
+        ? `My Gigling stable is ${stableStanding(skill.percentile, skill.rank, skill.eligibleTotal)} by proven roster quality on Paddock. Check yours:`
+        : "My Gigling stable on Paddock. Check yours:";
   const intent = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
 
   async function copyLink() {

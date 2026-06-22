@@ -46,6 +46,9 @@ export default function StableSkillCard({ skill }: { skill: StableSkill }) {
       <p className="type-page-title tabular-nums" style={{ color: "var(--glow)" }}>
         {stableStanding(skill.percentile, skill.rank, total)}
       </p>
+      {rank === 1 && (
+        <p className="type-data mt-0.5 uppercase tracking-wider" style={{ color: "var(--glow)" }}>The top stable in the game</p>
+      )}
 
       {/* Rank progress bar, same style as the pet dossier reveal bar. Low ranks
           show a low fill on purpose; the faint tick marks the top-10% climb. */}
@@ -65,7 +68,9 @@ export default function StableSkillCard({ skill }: { skill: StableSkill }) {
           Best horse{" "}
           <Link href={`/pet/${skill.topPetId}`} className="text-ink-soft transition-paddock hover:text-glow">#{skill.topPetId}</Link>
           , quality {formatScore(skill.topPetCq)}
-          {skill.topPetPercentile != null ? (
+          {skill.topPetIsBest ? (
+            <span style={{ color: "var(--glow)" }}>, the #1 horse in the game</span>
+          ) : skill.topPetPercentile != null ? (
             <span style={{ color: "var(--glow)" }}>, {formatHorsePercentile(skill.topPetPercentile)} in the game</span>
           ) : null}
           .

@@ -42,19 +42,31 @@ export function formatInt(value: number | null | undefined): string {
 // of 197", never the broken/insulting "Top 100%". The percentile uses floor with
 // a clamp at 1, so the very best reads "Top 1%", never "Top 0%". The 25% cutoff is
 // a deliberate display choice, not a statistical threshold.
+// The number of top ranks shown as an EXPLICIT rank (with denominator) rather
+// than a percentile. A rounded percentile collapses distinct top ranks together
+// (rank 1 and rank 2 both floor to "Top 1%"), so the top of the board must carry
+// its literal rank; only below this does "Top X%" become the more legible hero.
+export const RANK_EXPLICIT_TOP = 10;
+
 export function stableStanding(percentile: number | null | undefined, rank: number | null | undefined, total: number | null | undefined): string {
   if (percentile == null || rank == null || total == null || !Number.isFinite(percentile)) return "unranked";
-  if (percentile <= 0.25) return `Top ${Math.max(1, Math.floor(percentile * 100))}%`;
-  return `Rank ${rank} of ${total}`;
+  if (rank <= RANK_EXPLICIT_TOP) return `Rank ${rank} of ${total}`;
+  return `Top ${Math.max(1, Math.floor(percentile * 100))}%`;
 }
 
-// A single horse's confirmed-quality standing in the whole game, e.g. "top 0.1%".
-// Anchors the raw cq to its real percentile so an elite number is not misread as
-// mediocre, with no assumed maximum. fraction is a small value like 0.001.
+// A single horse's confirmed-quality standing in the whole game, e.g. "top 0.03%".
+// fraction is the EXACT share of horses with cq >= this horse's, so two horses of
+// different cq never collapse to the same figure: precision adapts to how small
+// the percentage is. No assumed maximum.
 export function formatHorsePercentile(fraction: number | null | undefined): string | null {
   if (fraction == null || !Number.isFinite(fraction)) return null;
   const x = fraction * 100;
-  const s = x < 1 ? Number(x.toFixed(2)).toString() : String(Math.round(x));
+  let s: string;
+  if (x >= 10) s = String(Math.round(x));
+  else if (x >= 1) s = x.toFixed(1);
+  else if (x >= 0.1) s = x.toFixed(2);
+  else s = x.toFixed(3); // very small: keep enough digits to stay distinct
+  if (parseFloat(s) === 0) s = "0.001"; // never show top 0%
   return `top ${s}%`;
 }
 

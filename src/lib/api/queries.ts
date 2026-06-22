@@ -990,21 +990,11 @@ async function stableSkillBlob(): Promise<{ blob: StableSkillBlob; computedAt: s
   return { blob: data.value as StableSkillBlob, computedAt: (data.updated_at as string) ?? null };
 }
 
-// A horse's confirmed quality as its standing in the full population (e.g. 0.001
-// for top 0.1%), using the precomputed thresholds. Returns null below the finest
-// mark. No assumed maximum: it reads off the real distribution.
-function topHorsePercentile(blob: StableSkillBlob, cq: number | null): number | null {
-  if (cq == null) return null;
-  const marks = blob.cqThresholds ?? [];
-  for (const m of marks) if (cq >= m.cq) return m.pct; // marks are most exclusive first
-  return null;
-}
-
 // One stable's skill, by address. ranked (>=3 proven, has rank + percentile),
 // limited (1-2 proven, scored but unranked), or none (0 proven, never fabricated).
 export async function getStableSkill(address: string): Promise<StableSkill> {
   const owner = address.toLowerCase();
-  const none: StableSkill = { state: "none", score: null, percentile: null, rank: null, provenCount: 0, totalHorses: 0, avgProvenCq: null, eligibleTotal: 0, topPetId: null, topPetCq: null, topPetPercentile: null };
+  const none: StableSkill = { state: "none", score: null, percentile: null, rank: null, provenCount: 0, totalHorses: 0, avgProvenCq: null, eligibleTotal: 0, topPetId: null, topPetCq: null, topPetPercentile: null, topPetIsBest: false };
   const wrap = await stableSkillBlob();
   if (!wrap) return none;
   const { blob } = wrap;
@@ -1022,12 +1012,13 @@ export async function getStableSkill(address: string): Promise<StableSkill> {
       eligibleTotal: blob.eligibleTotal,
       topPetId: b.topPetId,
       topPetCq: b.topPetCq,
-      topPetPercentile: topHorsePercentile(blob, b.topPetCq),
+      topPetPercentile: b.topPetCqPercentile,
+      topPetIsBest: b.topPetIsBest,
     };
   }
   const lim = blob.limited[owner];
   if (lim) {
-    return { state: "limited", score: lim.score, percentile: null, rank: null, provenCount: lim.provenCount, totalHorses: lim.totalHorses, avgProvenCq: lim.avgProvenCq, eligibleTotal: blob.eligibleTotal, topPetId: lim.topPetId, topPetCq: lim.topPetCq, topPetPercentile: topHorsePercentile(blob, lim.topPetCq) };
+    return { state: "limited", score: lim.score, percentile: null, rank: null, provenCount: lim.provenCount, totalHorses: lim.totalHorses, avgProvenCq: lim.avgProvenCq, eligibleTotal: blob.eligibleTotal, topPetId: lim.topPetId, topPetCq: lim.topPetCq, topPetPercentile: lim.topPetCqPercentile, topPetIsBest: lim.topPetIsBest };
   }
   return { ...none, eligibleTotal: blob.eligibleTotal };
 }

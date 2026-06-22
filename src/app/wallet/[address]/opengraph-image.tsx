@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 import { getWalletSummary } from "@/lib/api/queries";
-import { ownerDisplay, stableStanding, formatHorsePercentile } from "@/lib/format";
+import { ownerDisplay, formatHorsePercentile } from "@/lib/format";
 import { OG_SIZE, OG_COLORS, ogBackground, ogFonts } from "@/lib/og";
 
 export const runtime = "nodejs";
@@ -46,16 +46,31 @@ export default async function Image({ params }: { params: { address: string } })
   const topHorse = (skill?.topPetId != null ? s?.aTeam.find((p) => p.id === skill.topPetId) : null) ?? s?.aTeam[0] ?? null;
   const horseArt = await imageDataUrl(topHorse?.imgUrl);
 
-  // Hero figure: the standing when ranked (Top X% near the top, else Rank n of
-  // total, never Top 100%), honest holdings otherwise. Font shrinks for the longer
-  // "RANK n OF total" form so it never overflows.
-  const heroValue = ranked ? stableStanding(skill!.percentile, skill!.rank, skill!.eligibleTotal).toUpperCase() : `${s?.petCount ?? 0}`;
-  const heroSize = heroValue.length > 9 ? 78 : 144;
-  const heroLabel = ranked
-    ? "by proven roster quality"
-    : limited
+  // Hero figure, optimized for the brag: rank 1 stands alone as "#1 STABLE" with
+  // no denominator (the pool size only shrinks the flex); the rest of the top
+  // board shows its explicit rank with denominator (#2 of 195) so distinct ranks
+  // never collide; mid and lower show "TOP X%" where a percentage reads better.
+  let heroValue: string;
+  let heroLabel: string;
+  if (ranked) {
+    const r = skill!.rank ?? 0;
+    if (r === 1) {
+      heroValue = "#1 STABLE";
+      heroLabel = "the best stable in the game, by proven roster quality";
+    } else if (r <= 10) {
+      heroValue = `#${r} OF ${skill!.eligibleTotal}`;
+      heroLabel = "by proven roster quality";
+    } else {
+      heroValue = `TOP ${Math.max(1, Math.floor((skill!.percentile ?? 0) * 100))}%`;
+      heroLabel = "by proven roster quality";
+    }
+  } else {
+    heroValue = `${s?.petCount ?? 0}`;
+    heroLabel = limited
       ? `Giglings held. ${skill!.provenCount} proven, reveal 3 or more for your stable grade`
       : "Giglings held. Reveal horses to earn your stable grade";
+  }
+  const heroSize = heroValue.length <= 7 ? 144 : heroValue.length <= 11 ? 96 : 78;
 
   const valueText =
     s && s.stableValue.lowEth !== null
@@ -98,11 +113,15 @@ export default async function Image({ params }: { params: { address: string } })
                   <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkSoft }}>
                     #{topHorse.id} · {topHorse.confirmedQuality.toFixed(1)}
                   </span>
-                  {skill?.topPetPercentile != null && (
+                  {skill?.topPetIsBest ? (
+                    <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.glow, textTransform: "uppercase", letterSpacing: 1, marginTop: 4 }}>
+                      #1 horse in the game
+                    </span>
+                  ) : skill?.topPetPercentile != null ? (
                     <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.glow, textTransform: "uppercase", letterSpacing: 1, marginTop: 4 }}>
                       {formatHorsePercentile(skill.topPetPercentile)} in the game
                     </span>
-                  )}
+                  ) : null}
                 </div>
               )}
             </div>

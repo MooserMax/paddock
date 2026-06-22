@@ -16,24 +16,28 @@ import { setSyncState } from "../syncState";
 const PROVEN_EPS = 0.05; // proven is meaningfully above the shared floor constant
 const MIN_PROVEN_RANKED = 3; // comps-or-silence: 3+ proven to appear on the public board
 
+// The top horse's standing, computed exactly from the full distribution so two
+// horses of different cq never collapse to the same figure.
+interface TopHorse {
+  topPetId: number | null; // highest-cq proven horse, the card's anchor
+  topPetCq: number | null; // that horse's confirmed quality
+  topPetCqPercentile: number | null; // exact fraction of all horses with cq >= this
+  topPetIsBest: boolean; // true only if it is the single highest-cq horse in the game
+}
 // One eligible (>=3 proven) stable, stored sorted desc by score.
-export interface StableBoardEntry {
+export interface StableBoardEntry extends TopHorse {
   address: string;
   provenCount: number;
   totalHorses: number;
   avgProvenCq: number;
   score: number;
-  topPetId: number | null; // highest-cq proven horse, the card's anchor
-  topPetCq: number | null; // that horse's confirmed quality
 }
 // A 1-2 proven stable, scored but not ranked (limited data).
-export interface StableLimitedEntry {
+export interface StableLimitedEntry extends TopHorse {
   provenCount: number;
   totalHorses: number;
   avgProvenCq: number;
   score: number;
-  topPetId: number | null;
-  topPetCq: number | null;
 }
 export interface StableSkillBlob {
   computedAt: string;
@@ -44,10 +48,6 @@ export interface StableSkillBlob {
   eligibleTotal: number;
   board: StableBoardEntry[];
   limited: Record<string, StableLimitedEntry>;
-  // cq value at each top-percentile of the FULL horse population, so a horse's
-  // confirmed quality can be reported as its real standing (e.g. top 0.1%)
-  // without any assumed maximum. Sorted most exclusive first.
-  cqThresholds: { pct: number; cq: number }[];
 }
 
 export interface StableSkillResult {
@@ -114,12 +114,23 @@ export async function materializeStableSkill(): Promise<StableSkillResult> {
     return { address, n, avg, topPet: e.topPet, topCq: e.topCq, total: totalByOwner.get(address) ?? n };
   });
 
-  // cq thresholds over the FULL population, so a horse's quality reports its real
-  // standing (top 0.1%, etc.) with no assumed maximum. Marks are most exclusive
-  // first; a horse maps to the most exclusive mark its cq clears.
+  // The full cq distribution (sorted desc), so each top horse's standing is its
+  // EXACT fraction of horses with cq >= it, never a bucketed value that collapses
+  // distinct horses. No assumed maximum: this reads off the real distribution.
   const allCq = scores.map((s) => Number(s.confirmed_quality ?? 0)).sort((a, b) => b - a);
-  const PCT_MARKS = [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.02, 0.05];
-  const cqThresholds = PCT_MARKS.map((pct) => ({ pct, cq: round(allCq[Math.floor(pct * allCq.length)] ?? allCq[0] ?? 0, 2) }));
+  const maxCq = allCq[0] ?? 0;
+  // count of horses with cq >= target (allCq is sorted descending).
+  const countGte = (cq: number) => {
+    let lo = 0, hi = allCq.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (allCq[m] >= cq) lo = m + 1; else hi = m; }
+    return lo;
+  };
+  const topHorse = (topPet: number | null, topCq: number): TopHorse => ({
+    topPetId: topPet,
+    topPetCq: round(topCq, 2),
+    topPetCqPercentile: allCq.length ? countGte(topCq) / allCq.length : null,
+    topPetIsBest: topCq >= maxCq - 1e-9,
+  });
 
   // 4. Derive K: smallest K with 0 stables of <=2 proven in the top 10, ranked
   //    over ALL stables with >=1 proven so flukes can appear and be shrunk out.
@@ -133,12 +144,12 @@ export async function materializeStableSkill(): Promise<StableSkillResult> {
   // 5. Build the eligible board (>=3 proven, sorted desc) and the limited map.
   const eligible = stables
     .filter((s) => s.n >= MIN_PROVEN_RANKED)
-    .map((s) => ({ address: s.address, provenCount: s.n, totalHorses: s.total, avgProvenCq: round(s.avg, 2), score: round(score(s.n, s.avg, k), 3), topPetId: s.topPet, topPetCq: round(s.topCq, 2) }))
+    .map((s) => ({ address: s.address, provenCount: s.n, totalHorses: s.total, avgProvenCq: round(s.avg, 2), score: round(score(s.n, s.avg, k), 3), ...topHorse(s.topPet, s.topCq) }))
     .sort((a, b) => b.score - a.score);
   const limited: Record<string, StableLimitedEntry> = {};
   for (const s of stables) {
     if (s.n >= MIN_PROVEN_RANKED) continue;
-    limited[s.address] = { provenCount: s.n, totalHorses: s.total, avgProvenCq: round(s.avg, 2), score: round(score(s.n, s.avg, k), 3), topPetId: s.topPet, topPetCq: round(s.topCq, 2) };
+    limited[s.address] = { provenCount: s.n, totalHorses: s.total, avgProvenCq: round(s.avg, 2), score: round(score(s.n, s.avg, k), 3), ...topHorse(s.topPet, s.topCq) };
   }
 
   const blob: StableSkillBlob = {
@@ -150,7 +161,6 @@ export async function materializeStableSkill(): Promise<StableSkillResult> {
     eligibleTotal: eligible.length,
     board: eligible,
     limited,
-    cqThresholds,
   };
   await setSyncState("stable_skill_v1", blob);
   return { popMean: blob.popMean, k, floor: blob.floor, eligibleTotal: eligible.length, provenPop: proven.length };
