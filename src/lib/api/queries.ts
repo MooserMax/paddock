@@ -108,6 +108,8 @@ export async function getPetDossier(id: number): Promise<PetDossier | null> {
   const rawWinRate = pet.races_run ? pet.wins / pet.races_run : null;
   const valComps = (score?.valuation_comps ?? {}) as { thin?: boolean; note?: string; comps?: unknown[] };
   const ownerName = await lookupUsername(pet.owner_address);
+  const recWrap = await recordsBlob();
+  const records = recWrap ? petRecordsFromBlob(recWrap.blob, id) : [];
 
   return {
     id: pet.id,
@@ -159,6 +161,7 @@ export async function getPetDossier(id: number): Promise<PetDossier | null> {
       note: valComps.note ?? "No valuation computed yet.",
     },
     recentRaces,
+    records,
     meta: { lastSyncedAt: pet.last_synced_at, source: SOURCE },
   };
 }
@@ -429,6 +432,7 @@ export async function getRaceDetail(id: number, markedPetId?: number): Promise<R
     traitsByPet.set(t.pet_id, list);
   }
 
+  const recWrap = await recordsBlob();
   const entrants: RaceEntrantDTO[] = (entries ?? []).map((e) => {
     const p = petById.get(e.pet_id) ?? ({} as Record<string, unknown>);
     const s = scoreById.get(e.pet_id);
@@ -442,6 +446,7 @@ export async function getRaceDetail(id: number, markedPetId?: number): Promise<R
       ownerAddress: (e.owner_address as string) ?? (p.owner_address as string) ?? null,
       finishPosition: e.finish_position ?? null,
       timeMs: e.finish_time_ms != null ? Number(e.finish_time_ms) : null,
+      recordNote: recWrap ? recordNoteFromBlob(recWrap.blob, e.pet_id) : null,
       shrunkWinRate: shrunk,
       rawWinRate: racesRun ? wins / racesRun : null,
       wins,
@@ -913,6 +918,7 @@ export async function getScan(petIds: number[], trackLength: number, markedPetId
     traitsByPet.set(t.pet_id, list);
   }
 
+  const recWrap = await recordsBlob();
   // Preserve the caller's pet order; unknown ids are surfaced as empty entrants.
   const entrants: RaceEntrantDTO[] = petIds.map((id) => {
     const p = (petById.get(id) ?? {}) as Record<string, unknown>;
@@ -927,6 +933,7 @@ export async function getScan(petIds: number[], trackLength: number, markedPetId
       ownerAddress: (p.owner_address as string) ?? null,
       finishPosition: null,
       timeMs: null,
+      recordNote: recWrap ? recordNoteFromBlob(recWrap.blob, id) : null,
       shrunkWinRate: shrunk,
       rawWinRate: racesRun ? wins / racesRun : null,
       wins,
@@ -1045,4 +1052,95 @@ export async function getStableLeaderboard(limit: number, offset: number): Promi
     avgProvenCq: b.avgProvenCq,
   }));
   return { rows, limit, offset, total: blob.eligibleTotal, meta: { source: SOURCE, explanation: STABLE_EXPLANATION, popMean: blob.popMean, k: blob.k, computedAt } };
+}
+
+// ---- Racing records (precomputed in the cron, read-only) --------------------
+import type { RecordsResponse, RecordRow, RecordMode, RecordWindow } from "./types";
+import type { RacingRecordsBlob } from "../ingest/records";
+
+const RECORDS_EXPLANATION_ADJ =
+  "Fastest finishes from every resolved race, adjusted for track conditions. Hot tracks run faster, so raw times are not directly comparable. Adjusted times normalize to average conditions, validated out of sample. The condition each record was set in is always shown.";
+const RECORDS_EXPLANATION_RAW =
+  "Fastest finishes from every resolved race, on-chain times. The condition each record was set in is shown; the condition adjustment did not validate, so only raw times are listed.";
+
+async function recordsBlob(): Promise<{ blob: RacingRecordsBlob; computedAt: string | null } | null> {
+  const { data, error } = await db().from("sync_state").select("value, updated_at").eq("key", "racing_records_v1").maybeSingle();
+  if (error || !data?.value) return null;
+  return { blob: data.value as RacingRecordsBlob, computedAt: (data.updated_at as string) ?? null };
+}
+
+// A horse's best time per distance with its rank on each board (for the dossier).
+import type { PetDistanceRecord } from "./types";
+function petRecordsFromBlob(blob: RacingRecordsBlob, petId: number): PetDistanceRecord[] {
+  const out: PetDistanceRecord[] = [];
+  for (const track of blob.tracks) {
+    const raw = blob.byTrack[track]?.all?.raw ?? [];
+    const adj = blob.byTrack[track]?.all?.adjusted ?? [];
+    const ri = raw.findIndex((e) => e.petId === petId);
+    const ai = adj.findIndex((e) => e.petId === petId);
+    if (ri < 0 && ai < 0) continue;
+    const rawE = ri >= 0 ? raw[ri] : null;
+    const adjE = ai >= 0 ? adj[ai] : null;
+    const ref = adjE ?? rawE!;
+    out.push({
+      track,
+      bestRawMs: rawE?.rawTimeMs ?? adjE?.rawTimeMs ?? null,
+      rawRank: ri >= 0 ? ri + 1 : null,
+      bestAdjustedMs: blob.adjustedShipped ? adjE?.adjustedTimeMs ?? null : null,
+      adjustedRank: blob.adjustedShipped && ai >= 0 ? ai + 1 : null,
+      raceTemp: ref.raceTemp,
+      raceId: ref.raceId,
+    });
+  }
+  return out;
+}
+
+// The subtle scanner note for a horse that holds a distance record (rank 1),
+// adjusted preferred. Null for everyone else.
+function recordNoteFromBlob(blob: RacingRecordsBlob, petId: number): string | null {
+  if (blob.adjustedShipped) {
+    for (const track of blob.tracks) if (blob.byTrack[track]?.all?.adjusted?.[0]?.petId === petId) return `Holds the adjusted ${track}m record`;
+  }
+  for (const track of blob.tracks) if (blob.byTrack[track]?.all?.raw?.[0]?.petId === petId) return `Holds the ${track}m record`;
+  return null;
+}
+
+// One records board, by track, mode (raw|adjusted), and window (all|weekly|daily).
+// Reads the precomputed blob and resolves pet names and owner usernames at read
+// time, exactly like the leaderboards. Adjusted times are null when the
+// adjustment did not validate out of sample.
+export async function getRecords(trackParam: number | null, mode: RecordMode, window: RecordWindow, limit: number, offset: number): Promise<RecordsResponse> {
+  const wrap = await recordsBlob();
+  const base = (track: number, tracks: number[], adjustedAvailable: boolean, computedAt: string | null): Omit<RecordsResponse, "rows" | "total"> => ({
+    track, mode, window, adjustedAvailable, referenceCondition: wrap?.blob.referenceCondition ?? "average", tracks, limit, offset,
+    meta: { source: SOURCE, explanation: adjustedAvailable ? RECORDS_EXPLANATION_ADJ : RECORDS_EXPLANATION_RAW, computedAt },
+  });
+  if (!wrap || wrap.blob.tracks.length === 0) {
+    return { ...base(trackParam ?? 0, [], false, null), rows: [], total: 0 };
+  }
+  const { blob, computedAt } = wrap;
+  const track = trackParam != null && blob.tracks.includes(trackParam) ? trackParam : blob.tracks[0];
+  const effectiveMode: RecordMode = blob.adjustedShipped ? mode : "raw";
+  const list = blob.byTrack[track]?.[window]?.[effectiveMode] ?? [];
+  const page = list.slice(offset, offset + limit);
+  const pets = await petsByIds(page.map((e) => e.petId));
+  const ownerNames = await lookupUsernames(page.map((e) => pets.get(e.petId)?.owner_address ?? null));
+  const rows: RecordRow[] = page.map((e, i) => {
+    const p = pets.get(e.petId);
+    const ownerAddress = p?.owner_address ?? null;
+    return {
+      rank: offset + i + 1,
+      petId: e.petId,
+      name: p?.name ?? null,
+      rarity: Number(p?.rarity ?? 0),
+      ownerName: ownerAddress ? ownerNames.get(ownerAddress.toLowerCase()) ?? null : null,
+      ownerAddress,
+      rawTimeMs: e.rawTimeMs,
+      adjustedTimeMs: blob.adjustedShipped ? e.adjustedTimeMs : null,
+      raceTemp: e.raceTemp,
+      raceId: e.raceId,
+      resolvedAt: e.resolvedAt,
+    };
+  });
+  return { ...base(track, blob.tracks, blob.adjustedShipped, computedAt), rows, total: list.length };
 }

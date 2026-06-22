@@ -7,6 +7,9 @@ import type {
   LeaderboardResponse,
   LeaderboardMetric,
   StableLeaderboardResponse,
+  RecordsResponse,
+  RecordMode,
+  RecordWindow,
   SiteStats,
   RaceListResponse,
   CalibrationResult,
@@ -76,6 +79,8 @@ export const api = {
     apiGet<LeaderboardResponse>(`/leaderboard?metric=${metric}&limit=${limit}&offset=${offset}`, o ?? { revalidate: 120 }),
   stables: (limit = 25, offset = 0, o?: FetchOpts) =>
     apiGet<StableLeaderboardResponse>(`/stables?limit=${limit}&offset=${offset}`, o ?? { revalidate: 120 }),
+  records: (track: number | null, mode: RecordMode = "adjusted", window: RecordWindow = "all", limit = 100, offset = 0, o?: FetchOpts) =>
+    apiGet<RecordsResponse>(`/records?${track != null ? `track=${track}&` : ""}mode=${mode}&window=${window}&limit=${limit}&offset=${offset}`, o ?? { revalidate: 30 }),
   stats: (o?: FetchOpts) => apiGet<SiteStats>(`/stats`, o ?? { revalidate: 60 }),
   races: (track?: number | null, limit = 24, offset = 0, o?: FetchOpts) =>
     apiGet<RaceListResponse>(`/races?limit=${limit}&offset=${offset}${track ? `&track=${track}` : ""}`, o ?? { revalidate: 30 }),

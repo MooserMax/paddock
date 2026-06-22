@@ -82,6 +82,12 @@ export function ordinal(n: number): string {
 }
 
 // "3 days ago", "2 hours ago". Compact, no em-dashes.
+// A finish time in ms as seconds to 2 decimals, e.g. 19037 -> "19.04s".
+export function formatRaceTime(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "unknown";
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "unknown";
   const then = new Date(iso).getTime();

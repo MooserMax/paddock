@@ -12,7 +12,7 @@ import TraitRow from "@/components/dossier/TraitRow";
 import TrackFitBars from "@/components/dossier/TrackFitBars";
 import OwnerLabel from "@/components/OwnerLabel";
 import { STAT_LABEL, TRACK_LABEL } from "@/lib/display";
-import { formatEth, formatPct, formatScore, ordinal } from "@/lib/format";
+import { formatEth, formatPct, formatScore, formatRaceTime, ordinal } from "@/lib/format";
 
 export const revalidate = 120;
 
@@ -191,6 +191,40 @@ export default async function PetPage({ params }: { params: { id: string } }) {
           </Panel>
         </div>
       </div>
+
+      {/* Racing records: best time per distance, with record-holder badges */}
+      {d.records.length > 0 && (
+        <Panel eyebrow="Racing records" title="Best finish per distance" note="Lowest on-chain time at each distance, adjusted for track conditions. The condition each was set in is shown." className="mt-6">
+          <ul>
+            {d.records.map((r) => {
+              const holder = r.adjustedRank === 1 || r.rawRank === 1;
+              return (
+                <li key={r.track} className="flex items-center justify-between gap-3 border-b hairline py-2.5 last:border-0">
+                  <span className="flex items-center gap-2">
+                    <span className="type-data text-ink">{TRACK_LABEL[r.track] ?? `${r.track}m`}</span>
+                    {holder && (
+                      <span className="type-micro uppercase tracking-wider" style={{ color: "var(--gold)" }}>
+                        #1 fastest{r.adjustedRank === 1 ? ", adjusted" : ""}
+                      </span>
+                    )}
+                    <span className="type-micro uppercase text-ink-faint">{r.raceTemp}</span>
+                  </span>
+                  <span className="text-right">
+                    {r.bestAdjustedMs != null ? (
+                      <>
+                        <span className="type-data tabular-nums" style={{ color: "var(--gold)" }}>{formatRaceTime(r.bestAdjustedMs)} adj</span>
+                        <span className="type-micro tabular-nums text-ink-faint"> {formatRaceTime(r.bestRawMs)} raw</span>
+                      </>
+                    ) : (
+                      <span className="type-data tabular-nums" style={{ color: "var(--gold)" }}>{formatRaceTime(r.bestRawMs)}</span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Panel>
+      )}
 
       {/* Race history */}
       <Panel eyebrow="Race history" title="Recent finishes" className="mt-6">

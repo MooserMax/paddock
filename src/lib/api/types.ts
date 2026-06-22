@@ -91,7 +91,19 @@ export interface PetDossier {
   shark: SharkProfile;
   valuation: ValuationBandDTO;
   recentRaces: RaceHistoryItem[];
+  records: PetDistanceRecord[]; // this horse's best time per distance where it ranks
   meta: { lastSyncedAt: string | null; source: string };
+}
+
+// A horse's best finish at one distance, with its rank on the records board.
+export interface PetDistanceRecord {
+  track: number;
+  bestRawMs: number | null;
+  rawRank: number | null;
+  bestAdjustedMs: number | null; // null when the adjustment did not validate
+  adjustedRank: number | null;
+  raceTemp: string;
+  raceId: number;
 }
 
 export interface RaceHistoryItem {
@@ -195,6 +207,7 @@ export interface RaceEntrantDTO {
   ownerAddress: string | null;
   finishPosition: number | null;
   timeMs: number | null; // on-chain finish time in ms, null for unresolved or lobby scans
+  recordNote: string | null; // set when this horse holds a distance record, e.g. "Holds the adjusted 500m record"
   shrunkWinRate: number;
   rawWinRate: number | null;
   wins: number;
@@ -308,6 +321,37 @@ export interface RaceListResponse {
   offset: number;
   track: number | null;
   meta: { source: string };
+}
+
+export type RecordMode = "raw" | "adjusted";
+export type RecordWindow = "all" | "weekly" | "daily";
+
+export interface RecordRow {
+  rank: number;
+  petId: number;
+  name: string | null;
+  rarity: number;
+  ownerName: string | null;
+  ownerAddress: string | null;
+  rawTimeMs: number;
+  adjustedTimeMs: number | null; // null when the condition adjustment did not validate
+  raceTemp: string;
+  raceId: number;
+  resolvedAt: string | null;
+}
+
+export interface RecordsResponse {
+  track: number;
+  mode: RecordMode;
+  window: RecordWindow;
+  adjustedAvailable: boolean; // whether the out-of-sample-validated adjustment shipped
+  referenceCondition: string;
+  tracks: number[]; // tracks with enough records to show
+  limit: number;
+  offset: number;
+  total: number;
+  rows: RecordRow[];
+  meta: { source: string; explanation: string; computedAt: string | null };
 }
 
 export interface SiteStats {

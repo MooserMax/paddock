@@ -35,7 +35,15 @@ export default function EntrantRow({ entrant, marked }: { entrant: RaceEntrantDT
               {tag === "shark" ? "shark" : "in form"}
             </span>
           )}
+          {entrant.recordNote && (
+            <span className="type-micro uppercase tracking-wider" style={{ color: "var(--gold)" }}>
+              record
+            </span>
+          )}
         </div>
+        {entrant.recordNote && (
+          <p className="type-micro mt-0.5 normal-case" style={{ color: "var(--gold)" }}>{entrant.recordNote}</p>
+        )}
         {entrant.revealedTraits.length > 0 && (
           <div className="mt-0.5 flex flex-wrap gap-x-3">
             {entrant.revealedTraits.map((t) => (
