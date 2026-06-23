@@ -3,6 +3,7 @@ import { requireCron } from "@/lib/cronAuth";
 import { syncEthPrice } from "@/lib/ingest/ethPrice";
 import { catchUpRaces, hydrateRaces, scanResolvedRacesRpc } from "@/lib/ingest/races";
 import { rollingPetSync } from "@/lib/ingest/pets";
+import { scanPetTransfers } from "@/lib/ingest/petOwnership";
 import { materializeScoresFor } from "@/lib/ingest/scores";
 import { materializeStableSkill } from "@/lib/ingest/stableSkill";
 import { syncAccounts } from "@/lib/ingest/accounts";
@@ -96,6 +97,15 @@ export async function GET(req: NextRequest) {
       steps.resolvedRpc = await scanResolvedRacesRpc({ tempBudget: RPC_TEMP_BUDGET, deadline: t0 + RPC_DEADLINE_MS });
     } catch (e) {
       steps.resolvedRpcError = msg(e);
+    }
+
+    // 0b. Keep pet ownership current from on-chain Transfer logs, so a transferred
+    //     pet shows for its new owner within a cycle rather than only after it next
+    //     races. Free RPC, one small eth_getLogs, fault isolated.
+    try {
+      steps.petTransfers = await scanPetTransfers();
+    } catch (e) {
+      steps.petTransfersError = msg(e);
     }
 
     // 1. Forward race discovery from our cursor up to the frontier (bounded).

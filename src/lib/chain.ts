@@ -170,6 +170,40 @@ export async function fetchLobbyLogs(
   }
 }
 
+// Standard ERC-721 Transfer(address indexed from, address indexed to, uint256
+// indexed tokenId). Used to keep pet ownership in sync with on-chain reality.
+export const TOPIC_ERC721_TRANSFER =
+  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+// eth_getLogs for Giglings NFT Transfer events over a block range, with the same
+// halve-on-rejection fallback as the racing log readers. A pet's owner is whatever
+// address received the most recent Transfer of its token id.
+export async function fetchTransferLogs(
+  fromBlock: bigint,
+  toBlock: bigint
+): Promise<RawLog[]> {
+  if (fromBlock > toBlock) return [];
+  try {
+    return (await chainClient().request({
+      method: "eth_getLogs",
+      params: [
+        {
+          address: GIGAPET_NFT as Hex,
+          fromBlock: `0x${fromBlock.toString(16)}`,
+          toBlock: `0x${toBlock.toString(16)}`,
+          topics: [[TOPIC_ERC721_TRANSFER]],
+        },
+      ],
+    })) as RawLog[];
+  } catch (err) {
+    if (toBlock - fromBlock < 200n) throw err;
+    const mid = fromBlock + (toBlock - fromBlock) / 2n;
+    const left = await fetchTransferLogs(fromBlock, mid);
+    const right = await fetchTransferLogs(mid + 1n, toBlock);
+    return [...left, ...right];
+  }
+}
+
 export async function latestBlock(): Promise<bigint> {
   return chainClient().getBlockNumber();
 }
