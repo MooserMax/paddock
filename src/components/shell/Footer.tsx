@@ -30,7 +30,7 @@ export default async function Footer() {
             <span className="type-card-title">Paddock</span>
           </div>
           <p className="type-micro max-w-xs uppercase leading-relaxed text-ink-faint">
-            The open intelligence layer for Gigling Racing. One verified engine, never a fabricated number.
+            The open intelligence layer for Gigling Racing.
           </p>
           {(petsSyncedAt || lastResolvedAt) && (
             <p className="type-micro text-ink-faint">

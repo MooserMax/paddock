@@ -125,7 +125,7 @@ export default async function PetPage({ params }: { params: { id: string } }) {
       <div className="mt-8 grid gap-6 lg:grid-cols-[1.2fr_1fr]">
         {/* Stats + traits */}
         <div className="space-y-6">
-          <Panel eyebrow="The four stats" title="Revealed ranges" note="Never a fabricated midpoint. The band narrows as the horse races.">
+          <Panel eyebrow="The four stats" title="Revealed ranges" note="The band narrows as the horse races.">
             <div className="space-y-5">
               {statKeys.map((k) => (
                 <StatRangeBar
