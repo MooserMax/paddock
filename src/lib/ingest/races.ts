@@ -393,9 +393,11 @@ export async function catchUpRaces(maxRaces: number, deadline?: number, gapMs: n
 const RESOLVED_RPC_STATE_KEY = "resolved_scan_rpc";
 const RPC_COLD_LOOKBACK = 12_000n; // ~100 min at ~0.5s/block: a safe recent window on a cold start
 const RPC_MAX_WINDOW = 40_000n; // cap blocks scanned per call; fetchLobbyLogs halves on rejection
-const PETRACING_RESOLVED_DATA = [
+// RACE_CREATED data is the tuple (uint256[] payoutBps, uint256, uint256[], uint256[]);
+// we only need the first array. Verified against live events in lobbies.ts.
+const PETRACING_CREATED_DATA = [
   { type: "uint256[]" },
-  { type: "uint256[]" },
+  { type: "uint256" },
   { type: "uint256[]" },
   { type: "uint256[]" },
 ] as const;
@@ -425,7 +427,7 @@ function configWords(data: string): { fieldSize: number; trackLength: number } {
 }
 function createdPayout(data: `0x${string}`): number[] {
   try {
-    const [bps] = decodeAbiParameters(PETRACING_RESOLVED_DATA, data);
+    const [bps] = decodeAbiParameters(PETRACING_CREATED_DATA, data);
     return (bps as readonly bigint[]).map((n) => Number(n));
   } catch {
     return [];
