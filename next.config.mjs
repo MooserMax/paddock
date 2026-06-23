@@ -43,6 +43,9 @@ const nextConfig = {
       "base-uri 'self'",
       "form-action 'self'",
       "object-src 'none'",
+      // Collect real violations so a browser AGW/Privy connect session enumerates
+      // the dynamic origins the wallet flow needs, the input to the enforced policy.
+      "report-uri /api/csp-report",
     ].join("; ");
     return [
       {
