@@ -118,6 +118,13 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
         </span>
       </div>
 
+      {/* Board-level honesty caveat, surfaced once rather than per card. */}
+      {personalized && (
+        <p className="type-micro mb-4 normal-case text-ink-faint">
+          Edges are Paddock model estimates shown as bands, not yet calibrated at these odds, never a guarantee.
+        </p>
+      )}
+
       {error && lobbies.length === 0 && (
         <p className="type-micro mb-3 normal-case" style={{ color: "var(--gold)" }}>{error}</p>
       )}
@@ -168,7 +175,6 @@ function LobbyCard({ lobby: l, personalized, connectedAddress, onEntered }: { lo
               {", "}{l.edge.bandRange}
               {evEth != null ? `, EV est ${formatEth(evEth, 4)}` : ""}
             </p>
-            <p className="type-micro normal-case text-ink-faint">estimate, not yet calibrated at these odds</p>
           </div>
         )}
         {personalized && !l.edge && (
@@ -194,7 +200,7 @@ function LobbyCard({ lobby: l, personalized, connectedAddress, onEntered }: { lo
 
       <p className="type-micro mt-2 normal-case text-ink-faint">
         Field strength: {l.fieldStrength.sharkCount} shark{l.fieldStrength.sharkCount === 1 ? "" : "s"}, avg ELO {l.fieldStrength.avgElo ?? "unknown"}, top quality {formatInt(l.fieldStrength.topCq)}.
-        {personalized && l.edge ? " This race is forming, so your odds shift as horses enter, and the estimate is not yet calibrated at these odds, so treat the band as a guide, not a guarantee." : ""}
+        {personalized && l.edge ? " This race is forming, so your odds shift as horses enter." : ""}
       </p>
 
       {/* One-click entry: the algo's pick for this race, signed by the user's own

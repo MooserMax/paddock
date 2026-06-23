@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useAccount, useConnect, useDisconnect, usePublicClient, useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { useLoginWithAbstract } from "@abstract-foundation/agw-react";
 import type { LobbyRow, LobbyResponse } from "@/lib/api/types";
@@ -28,7 +29,10 @@ export function ConnectBar() {
           <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--green)" }} aria-hidden />
           Wallet connected, {shortAddress(address)}, showing your edge
         </span>
-        <button onClick={() => disconnect()} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Disconnect</button>
+        <span className="flex items-center gap-3">
+          <Link href="/stable" className="type-micro uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>Your stable</Link>
+          <button onClick={() => disconnect()} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Disconnect</button>
+        </span>
       </div>
     );
   }

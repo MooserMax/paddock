@@ -1187,11 +1187,12 @@ export async function getRecords(trackParam: number | null, mode: RecordMode, wi
 }
 
 // ---- Race Finder, live lobbies + your edge (read-only) ----------------------
-import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge } from "./types";
+import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge, RaceTrackingDTO, RaceTrackEntrant } from "./types";
 import { getOpenLobbies, POLL_MS, type OpenLobby } from "../lobbies";
+import { fetchRace } from "../gigaverse";
 
 const LOBBY_NOTE =
-  "Live forming lobbies, polled politely and cached a few seconds, so the data may lag a little. Your win probability is a calibrated estimate for the field as it stands, and it shifts as horses enter; it is never a guarantee.";
+  "Live forming lobbies, polled politely and cached a few seconds, so the data may lag a little. Your edge is an estimate for the field as it stands, and it shifts as horses enter; it is not a guarantee.";
 
 // Strength fields for an entrant or candidate horse, joined from pets + pet_scores.
 interface Strength {
@@ -1346,4 +1347,78 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
     pollMs: POLL_MS,
     meta: { source: SOURCE, note: LOBBY_NOTE },
   };
+}
+
+// ---- Follow your entry, live race tracking (read-only) ----------------------
+// Live race state for one race the connected wallet is in, sourced from the public
+// race API on demand (a single race, not a per-race poll loop, so it is not the
+// throttling pattern that was removed from the lobby path). The client polls this
+// and stops at phase 3; the band is Paddock's prediction for the user's horse,
+// computed from the field with the same odds engine the lobby board uses.
+export async function getRaceTracking(raceId: number, pet: number): Promise<RaceTrackingDTO | null> {
+  let race: Awaited<ReturnType<typeof fetchRace>> | null = null;
+  try {
+    race = await fetchRace(raceId);
+  } catch {
+    return null;
+  }
+  if (!race || !race.success) return null;
+
+  const resolved = Array.isArray(race.finalRanking) && race.finalRanking.length > 0;
+  const entryPetIds = (race.entries ?? []).map((e) => e.petId);
+  const fieldIds = entryPetIds.length > 0 ? entryPetIds : (race.finalRanking ?? []);
+  const strength = await strengthByIds([...fieldIds, pet]);
+
+  // Prediction band: odds over the field, the user's horse already in it.
+  let band: { label: string; range: string } | null = null;
+  const inField = fieldIds.includes(pet);
+  const inputs = fieldIds
+    .map((id) => { const s = strength.get(id); return s ? oddsInput(id, s, race!.trackLength) : null; })
+    .filter((x): x is NonNullable<typeof x> => x != null);
+  const candidateInputs = inField ? inputs : (strength.get(pet) ? [...inputs, oddsInput(pet, strength.get(pet)!, race.trackLength)] : inputs);
+  if (candidateInputs.some((i) => i.petId === pet)) {
+    const { results } = computeOdds(candidateInputs);
+    const p = results.find((r) => r.petId === pet)?.winProbability;
+    if (p != null) band = pWinBand(p);
+  }
+
+  const finishByPet = new Map<number, number>();
+  if (resolved) race.finalRanking.forEach((id, i) => finishByPet.set(id, i + 1));
+  const timeByPet = new Map<number, number>();
+  if (resolved) race.finalRanking.forEach((id, i) => { if (race!.finishTimes[i] != null) timeByPet.set(id, race!.finishTimes[i]); });
+
+  const entrantIds = resolved ? race.finalRanking : fieldIds;
+  const entrants: RaceTrackEntrant[] = entrantIds.map((id) => ({
+    petId: id,
+    name: strength.get(id)?.name ?? null,
+    finishPosition: finishByPet.get(id) ?? null,
+    timeMs: timeByPet.get(id) ?? null,
+    isYours: id === pet,
+  }));
+
+  const yourPayout = race.petPayouts?.[String(pet)]?.amount ?? null;
+
+  return {
+    raceId,
+    phase: race.phase,
+    resolved,
+    trackLength: race.trackLength,
+    raceTemp: race.raceTemp || null,
+    fieldSize: race.fieldSize ?? entrants.length,
+    petCount: entryPetIds.length || entrants.length,
+    entrants,
+    yourPetId: pet,
+    yourName: strength.get(pet)?.name ?? null,
+    yourPlacing: finishByPet.get(pet) ?? null,
+    yourTimeMs: timeByPet.get(pet) ?? null,
+    yourPayoutWei: yourPayout != null ? String(yourPayout) : null,
+    band,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function findMyRaceId(wallet: string): Promise<{ raceId: number | null; petId: number | null }> {
+  const { findMyRace } = await import("../raceTracker");
+  const found = await findMyRace(wallet);
+  return { raceId: found?.raceId ?? null, petId: found?.petId ?? null };
 }

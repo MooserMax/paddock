@@ -18,7 +18,7 @@ export default function RaceFinderPage({ searchParams }: { searchParams: { walle
         <p className="eyebrow">Live forming lobbies</p>
         <h1 className="type-page-title mt-2 text-balance text-ink">Race Finder</h1>
         <p className="type-body mt-3 text-ink-soft">
-          Open races, ranked by YOUR win edge. Most boards just show you forming lobbies and a join button. Paddock runs its own odds model, so it estimates which lobby to enter and with which horse, shown as an honest band rather than a false-precise percent because the live model is not yet calibrated at these odds. Add your wallet address to see your edge in each field; the data is read-only, no signature, no connection.
+          Open races, ranked by YOUR win edge. Paddock runs its own odds model, so it tells you which lobby to enter and with which horse, shown as an honest band, not a false-precise percent. Add your wallet address to see your edge in each field; read-only, no signature.
         </p>
       </header>
 

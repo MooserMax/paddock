@@ -447,3 +447,35 @@ export interface LeaderboardResponse {
   rows: LeaderboardRow[];
   meta: { source: string; explanation: string };
 }
+
+// Piece 3: follow-your-entry race tracking (read-only).
+export interface MyRaceDTO {
+  raceId: number | null; // most recent race the wallet's pets are in, null if none found
+  petId: number | null; // the wallet's pet in that race
+}
+
+export interface RaceTrackEntrant {
+  petId: number;
+  name: string | null;
+  finishPosition: number | null; // present once resolved
+  timeMs: number | null;
+  isYours: boolean;
+}
+
+export interface RaceTrackingDTO {
+  raceId: number;
+  phase: number; // 1 forming, 2 locked/running, 3 resolved
+  resolved: boolean;
+  trackLength: number;
+  raceTemp: string | null;
+  fieldSize: number;
+  petCount: number;
+  entrants: RaceTrackEntrant[];
+  yourPetId: number;
+  yourName: string | null;
+  yourPlacing: number | null; // finish position once resolved
+  yourTimeMs: number | null;
+  yourPayoutWei: string | null;
+  band: { label: string; range: string } | null; // Paddock's prediction for your horse
+  fetchedAt: string;
+}
