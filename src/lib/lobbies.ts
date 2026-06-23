@@ -236,19 +236,29 @@ async function doRefresh(): Promise<void> {
   }
 }
 
-// Returns the current snapshot. Serves a cached snapshot instantly and kicks off at
-// most one background refresh when stale (stale-while-revalidate); only the very
-// first call, with no cache yet, awaits the refresh. Past the staleness ceiling the
-// snapshot is no longer treated as live: we return no lobbies (flagged delayed) so an
-// old field is never rendered as if current.
+// Returns the current snapshot. When the snapshot is stale, the refresh is AWAITED
+// within the request, never fired into the background. On Vercel this route is a
+// serverless function that is frozen the instant its HTTP response is sent, so a
+// background promise would never complete and the snapshot would age forever, hit
+// the ceiling, and serve empty+delayed permanently. Awaiting keeps the function
+// alive until the snapshot actually advances. Single-flight is preserved via the
+// in-process `inflight` promise: concurrent requests on the same warm instance
+// share one upstream read, so the RPC still sees roughly one eth_getLogs per FRESH
+// window, not one per request. A single eth_getLogs is fast, so awaiting per stale
+// read adds negligible latency and is the correct tradeoff for never freezing.
 export async function getOpenLobbies(): Promise<{ lobbies: OpenLobby[]; fetchedAt: number | null; delayed: boolean }> {
-  const now = Date.now();
-  const stale = !cache || now - cache.fetchedAt >= ttl;
-  if (stale && !inflight) inflight = doRefresh().finally(() => { inflight = null; });
-  if (!cache && inflight) await inflight; // first load blocks until we have data
+  const stale = !cache || Date.now() - cache.fetchedAt >= ttl;
+  if (stale) {
+    if (!inflight) inflight = doRefresh().finally(() => { inflight = null; });
+    await inflight; // serverless safe: the response waits, so the refresh truly runs
+  }
 
   const fetchedAt = cache?.fetchedAt ?? null;
-  const age = cache ? now - cache.fetchedAt : Infinity;
+  // Re-read the clock after awaiting: a successful refresh has just advanced
+  // cache.fetchedAt. Only a genuinely failed RPC read leaves the snapshot past the
+  // ceiling, and even then the next request awaits a fresh attempt and recovers, so
+  // a single failure can never wedge the instance into permanent empty.
+  const age = cache ? Date.now() - cache.fetchedAt : Infinity;
   if (age > STALE_CEILING_MS) {
     return { lobbies: [], fetchedAt, delayed: true };
   }
