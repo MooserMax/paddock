@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import RaceFinderBoard from "@/components/racefinder/RaceFinderBoard";
+import WalletProvider from "@/components/racefinder/WalletProvider";
 
 export const metadata: Metadata = {
   title: "Race Finder",
@@ -21,7 +22,9 @@ export default function RaceFinderPage({ searchParams }: { searchParams: { walle
         </p>
       </header>
 
-      <RaceFinderBoard initialWallet={wallet} />
+      <WalletProvider>
+        <RaceFinderBoard initialWallet={wallet} />
+      </WalletProvider>
     </div>
   );
 }

@@ -2,9 +2,11 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useAccount } from "wagmi";
 import type { LobbyResponse, LobbyRow } from "@/lib/api/types";
 import RarityBadge from "@/components/RarityBadge";
 import { formatEth, formatInt } from "@/lib/format";
+import { ConnectBar, EntryButton } from "./EntryControls";
 
 // The live, ranked decision board. Polls /api/v1/lobbies on the polite interval
 // (the server cache fans one upstream poll out to all viewers), updates in place
@@ -31,13 +33,18 @@ function secondsAgo(iso: string | null): string {
 }
 
 export default function RaceFinderBoard({ initialWallet }: { initialWallet: string }) {
+  const { address, isConnected } = useAccount();
   const [wallet, setWallet] = useState(initialWallet);
   const [input, setInput] = useState(initialWallet);
   const [data, setData] = useState<LobbyResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0); // re-render the "Xs ago" label
-  const walletRef = useRef(wallet);
-  walletRef.current = wallet;
+  // When a wallet is connected, its address drives the edge, so the recommended
+  // horse is one this account actually owns. Otherwise a manually pasted address
+  // gives read-only edge with no connection.
+  const effectiveWallet = isConnected && address ? address : wallet;
+  const walletRef = useRef(effectiveWallet);
+  walletRef.current = effectiveWallet;
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +65,9 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
     return () => { clearInterval(poll); clearInterval(clock); };
   }, [load]);
 
+  // Reload immediately when the connected address changes so the edge follows the wallet.
+  useEffect(() => { load(); }, [address, isConnected, load]);
+
   function submitWallet(e: React.FormEvent) {
     e.preventDefault();
     const v = input.trim();
@@ -67,25 +77,31 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
 
   const lobbies = data?.lobbies ?? [];
   const personalized = data?.personalized ?? false;
+  const connectedAddress = isConnected && address ? address : null;
 
   return (
     <div>
-      {/* Wallet input for personalized edge (read-only, address only) */}
-      <form onSubmit={submitWallet} className="mb-3 flex flex-col gap-2 sm:flex-row">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          inputMode="text"
-          spellCheck={false}
-          placeholder="Paste your wallet address for your win edge"
-          aria-label="Your wallet address"
-          className="type-data flex-1 rounded-md border bg-transparent px-3 py-2.5 text-ink outline-none transition-paddock focus-visible:border-glow"
-          style={{ borderColor: "var(--line-strong)", background: "var(--paper-raised)" }}
-        />
-        <button type="submit" className="type-data rounded-md px-5 py-2.5" style={{ background: "var(--action)", color: "#14110f" }}>
-          {personalized ? "Update edge" : "Show my edge"}
-        </button>
-      </form>
+      {/* Connect for one-click entry (AGW primary, injected fallback). */}
+      <ConnectBar />
+
+      {/* Read-only edge by address, only when no wallet is connected. */}
+      {!connectedAddress && (
+        <form onSubmit={submitWallet} className="mb-3 flex flex-col gap-2 sm:flex-row">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            inputMode="text"
+            spellCheck={false}
+            placeholder="Paste your wallet address for your win edge"
+            aria-label="Your wallet address"
+            className="type-data flex-1 rounded-md border bg-transparent px-3 py-2.5 text-ink outline-none transition-paddock focus-visible:border-glow"
+            style={{ borderColor: "var(--line-strong)", background: "var(--paper-raised)" }}
+          />
+          <button type="submit" className="type-data rounded-md px-5 py-2.5" style={{ background: "var(--action)", color: "#14110f" }}>
+            {personalized ? "Update edge" : "Show my edge"}
+          </button>
+        </form>
+      )}
 
       {/* Freshness + honesty */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
@@ -117,7 +133,7 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
         </div>
       ) : (
         <div className="grid gap-3">
-          {lobbies.map((l) => <LobbyCard key={l.raceId} lobby={l} personalized={personalized} />)}
+          {lobbies.map((l) => <LobbyCard key={l.raceId} lobby={l} personalized={personalized} connectedAddress={connectedAddress} onEntered={load} />)}
         </div>
       )}
 
@@ -128,7 +144,7 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
   );
 }
 
-function LobbyCard({ lobby: l, personalized }: { lobby: LobbyRow; personalized: boolean }) {
+function LobbyCard({ lobby: l, personalized, connectedAddress, onEntered }: { lobby: LobbyRow; personalized: boolean; connectedAddress: string | null; onEntered: () => void }) {
   const fee = Number(l.entryFeeWei || "0");
   const evEth = l.edge?.evWei != null ? Number(l.edge.evWei) / 1e18 : null;
   return (
@@ -180,6 +196,15 @@ function LobbyCard({ lobby: l, personalized }: { lobby: LobbyRow; personalized: 
         Field strength: {l.fieldStrength.sharkCount} shark{l.fieldStrength.sharkCount === 1 ? "" : "s"}, avg ELO {l.fieldStrength.avgElo ?? "unknown"}, top quality {formatInt(l.fieldStrength.topCq)}.
         {personalized && l.edge ? " This race is forming, so your odds shift as horses enter, and the estimate is not yet calibrated at these odds, so treat the band as a guide, not a guarantee." : ""}
       </p>
+
+      {/* One-click entry: the algo's pick for this race, signed by the user's own
+          wallet. Only when connected and this lobby has a recommended horse. */}
+      {connectedAddress && l.edge && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <EntryButton lobby={l} walletAddress={connectedAddress} onEntered={onEntered} />
+          <span className="type-micro normal-case text-ink-faint">Paddock recommends {l.edge.petName ?? `#${l.edge.petId}`} here, {l.edge.band.toLowerCase()} in this field.</span>
+        </div>
+      )}
     </div>
   );
 }
