@@ -1,23 +1,20 @@
 import Link from "next/link";
 import { api } from "@/lib/api/client";
-import type { SiteStats, LeaderboardResponse } from "@/lib/api/types";
+import type { SiteStats, LeaderboardResponse, RecentWinsResponse } from "@/lib/api/types";
 import WalletSearch from "@/components/WalletSearch";
 import RarityBadge from "@/components/RarityBadge";
+import RecentWins from "@/components/home/RecentWins";
+import { getRecentWins } from "@/lib/api/queries";
 import { formatEth, formatInt, formatScore, formatPct } from "@/lib/format";
 
 export const revalidate = 60;
 
-const FLAGSHIPS = [
-  { id: 6249, note: "Giga, Surger revealed" },
-  { id: 1971, note: "top confirmed quality" },
-  { id: 15874, note: "unrevealed Giga, all upside" },
-];
-
 export default async function Home() {
   let stats: SiteStats | null = null;
   let board: LeaderboardResponse | null = null;
+  let recentWins: RecentWinsResponse = { wins: [], ethUsd: null, fetchedAt: new Date().toISOString() };
   try {
-    [stats, board] = await Promise.all([api.stats(), api.leaderboard("cq", 6)]);
+    [stats, board, recentWins] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12)]);
   } catch {
     // The hero still renders without live numbers; never a blank crash.
   }
@@ -55,26 +52,8 @@ export default async function Home() {
         </div>
       </section>
 
-      {/* Flagship dossiers: one click to a rich page, not a search box. */}
-      <section className="mx-auto max-w-page px-4 py-12 md:px-6">
-        <div className="mb-5 flex items-baseline justify-between">
-          <h2 className="type-section text-ink">Start with a flagship</h2>
-          <Link href="/leaderboards" className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">
-            All leaderboards
-          </Link>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {FLAGSHIPS.map((f) => (
-            <Link key={f.id} href={`/pet/${f.id}`} className="panel transition-paddock group flex items-center justify-between gap-3 p-4 hover:border-line-strong">
-              <div>
-                <p className="type-card-title text-ink">Gigling #{f.id}</p>
-                <p className="type-micro mt-0.5 normal-case text-ink-faint">{f.note}</p>
-              </div>
-              <span className="asterisk text-lg opacity-0 transition-paddock group-hover:opacity-100">{"→"}</span>
-            </Link>
-          ))}
-        </div>
-      </section>
+      {/* Recent paid-race wins: live money moving, the social proof slot. */}
+      <RecentWins initial={recentWins} />
 
       {/* Top confirmed horses: the engine's headline output. */}
       {board && board.rows.length > 0 && (

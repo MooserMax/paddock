@@ -488,3 +488,24 @@ export interface RaceTrackingDTO {
   band: { label: string; range: string } | null; // Paddock's prediction for your horse
   fetchedAt: string;
 }
+
+// Homepage recent paid-race wins feed (read-only, real winner takes only).
+export interface RecentWin {
+  raceId: number;
+  petId: number;
+  petName: string | null;
+  ownerAddress: string | null;
+  ownerName: string | null;
+  payoutWei: string; // the winner's actual received take, petPayouts[winner].amount
+  payoutEth: number;
+  payoutUsd: number | null; // null when no eth price is cached
+  trackLength: number | null;
+  fieldSize: number | null;
+  resolvedAt: string | null;
+}
+
+export interface RecentWinsResponse {
+  wins: RecentWin[];
+  ethUsd: number | null;
+  fetchedAt: string;
+}

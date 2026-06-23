@@ -1437,3 +1437,70 @@ export async function findMyRaceId(wallet: string): Promise<{ raceId: number | n
   const found = await findMyRace(wallet);
   return { raceId: found?.raceId ?? null, petId: found?.petId ?? null };
 }
+
+// ---- Homepage recent paid-race wins feed (read-only) ------------------------
+// Real winners of PAID races (entry_fee_wei > 0), with the winner's ACTUAL take.
+// The take is race_entries.payout_wei for finish_position 1, which the ingest
+// writes from petPayouts[winner].amount, the winner's received payout (race
+// placement plus jackpot), never the gross pool. A race whose winner has no
+// recorded payout is omitted rather than guessed.
+export async function getRecentWins(limit = 12): Promise<import("./types").RecentWinsResponse> {
+  const { data: races } = await db()
+    .from("races")
+    .select("race_id, resolved_at, track_length, field_size")
+    .eq("resolved", true)
+    .gt("entry_fee_wei", 0) // paid races only
+    .not("resolved_at", "is", null)
+    .order("resolved_at", { ascending: false })
+    .limit(limit * 4);
+  const raceRows = races ?? [];
+  const raceMeta = new Map(raceRows.map((r) => [r.race_id as number, r]));
+  const raceIds = raceRows.map((r) => r.race_id as number);
+
+  const fetchedAt = new Date().toISOString();
+  if (raceIds.length === 0) return { wins: [], ethUsd: null, fetchedAt };
+
+  // Winners with a real recorded take.
+  const { data: winners } = await db()
+    .from("race_entries")
+    .select("race_id, pet_id, owner_address, payout_wei")
+    .in("race_id", raceIds)
+    .eq("finish_position", 1)
+    .gt("payout_wei", 0);
+
+  const rows = (winners ?? [])
+    .map((w) => ({ ...w, meta: raceMeta.get(w.race_id as number) }))
+    .filter((w) => w.meta)
+    .sort((a, b) => String(b.meta!.resolved_at ?? "").localeCompare(String(a.meta!.resolved_at ?? "")))
+    .slice(0, limit);
+
+  if (rows.length === 0) return { wins: [], ethUsd: null, fetchedAt };
+
+  const [{ data: pets }, { data: price }] = await Promise.all([
+    db().from("pets").select("id, name").in("id", rows.map((r) => r.pet_id as number)),
+    db().from("eth_price").select("usd").eq("id", 1).maybeSingle(),
+  ]);
+  const nameById = new Map((pets ?? []).map((p) => [p.id as number, p.name as string | null]));
+  const ownerNames = await lookupUsernames(rows.map((r) => (r.owner_address as string) ?? null));
+  const ethUsd = price ? Number(price.usd) : null;
+
+  const wins = rows.map((r) => {
+    const payoutEth = Number(r.payout_wei) / 1e18;
+    const addr = (r.owner_address as string) ?? null;
+    return {
+      raceId: r.race_id as number,
+      petId: r.pet_id as number,
+      petName: nameById.get(r.pet_id as number) ?? null,
+      ownerAddress: addr,
+      ownerName: addr ? ownerNames.get(addr.toLowerCase()) ?? null : null,
+      payoutWei: String(r.payout_wei),
+      payoutEth,
+      payoutUsd: ethUsd != null ? payoutEth * ethUsd : null,
+      trackLength: (r.meta!.track_length as number) ?? null,
+      fieldSize: (r.meta!.field_size as number) ?? null,
+      resolvedAt: (r.meta!.resolved_at as string) ?? null,
+    };
+  });
+
+  return { wins, ethUsd, fetchedAt };
+}
