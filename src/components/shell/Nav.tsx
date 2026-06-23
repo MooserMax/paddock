@@ -2,6 +2,8 @@ import Link from "next/link";
 import NavLink from "./NavLink";
 import ThemeToggle from "./ThemeToggle";
 import CommandTrigger from "./CommandTrigger";
+import DocsDropdown from "./DocsDropdown";
+import StableNavItem from "./StableNavItem";
 import { NAV_ROUTES } from "@/lib/nav";
 
 export default function Nav() {
@@ -32,6 +34,10 @@ export default function Nav() {
               </span>
             )
           )}
+          {/* Stable, shown only when a wallet is connected. */}
+          <StableNavItem />
+          {/* Docs dropdown groups Odds, Methodology, API. */}
+          <DocsDropdown />
         </div>
 
         <div className="flex items-center gap-2">

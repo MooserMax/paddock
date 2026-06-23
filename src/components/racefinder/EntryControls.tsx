@@ -6,6 +6,7 @@ import { useAccount, useConnect, useDisconnect, usePublicClient, useSendTransact
 import { useLoginWithAbstract } from "@abstract-foundation/agw-react";
 import type { LobbyRow, LobbyResponse } from "@/lib/api/types";
 import { shortAddress, formatEth } from "@/lib/format";
+import { setWalletFlag } from "@/lib/walletFlag";
 import { buildJoinTx, assertKnownGoodJoinTx, isFreeEntry, PETRACING_CONTRACT, JOIN_RACE_SELECTOR } from "@/lib/entry/joinRace";
 
 // One-click entry UI. Non-custodial: the user connects their own wallet and signs
@@ -21,6 +22,12 @@ export function ConnectBar() {
   const { connect, connectors, isPending } = useConnect();
   const { disconnect } = useDisconnect();
   const injected = connectors.find((c) => c.type === "injected");
+
+  // Mirror connection state to the lightweight flag the global nav reads, so the
+  // Stable nav item can appear without loading the wallet provider on every page.
+  useEffect(() => {
+    setWalletFlag(isConnected && address ? address : null);
+  }, [isConnected, address]);
 
   if (isConnected && address) {
     return (

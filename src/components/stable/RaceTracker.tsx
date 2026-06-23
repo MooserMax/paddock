@@ -102,7 +102,7 @@ export default function RaceTracker({ wallet }: { wallet: string }) {
             {/* Pre-race prediction, the Paddock differentiator */}
             {r.band && (
               <p className="type-micro mt-1 normal-case text-ink-faint">
-                Paddock predicts {yourName} is a <span style={{ color: "var(--glow)" }}>{r.band.label.toLowerCase()}</span> here, {r.band.range}. Estimate, not a guarantee.
+                Paddock predicts {yourName} is a <span style={{ color: "var(--glow)" }}>{r.band.label.toLowerCase()}</span> here, {r.band.range}.
               </p>
             )}
 
@@ -111,7 +111,7 @@ export default function RaceTracker({ wallet }: { wallet: string }) {
               <p className="type-body mt-3 text-ink-soft">Race forming. Your horse is in; the field is still filling.</p>
             )}
             {r.phase === 2 && (
-              <p className="type-body mt-3 text-ink-soft">Race locked and running. Results land here as soon as it finishes, no fake play-by-play, race timing is not exposed mid-race.</p>
+              <p className="type-body mt-3 text-ink-soft">Race locked and running. Results land here as soon as it finishes.</p>
             )}
 
             {r.resolved && (

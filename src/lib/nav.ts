@@ -9,6 +9,10 @@ export interface NavRoute {
   ready: boolean;
 }
 
+// Primary top-level bar. Wallet stays top-level on purpose: it looks up ANY
+// player's stable by address, distinct from the connected user's own Stable
+// (which appears as a top-level item only when a wallet is connected, see
+// StableNavItem). Odds, Methodology, and API moved under the Docs dropdown.
 export const NAV_ROUTES: NavRoute[] = [
   { href: "/wallet", label: "Wallet", ready: true },
   { href: "/races", label: "Races", ready: true },
@@ -16,6 +20,10 @@ export const NAV_ROUTES: NavRoute[] = [
   { href: "/scanner", label: "Scanner", ready: true },
   { href: "/leaderboards", label: "Leaderboards", ready: true },
   { href: "/records", label: "Records", ready: true },
+];
+
+// Grouped under the "Docs" dropdown, the first grouped nav element.
+export const DOCS_ROUTES: NavRoute[] = [
   { href: "/calibration", label: "Odds", ready: true },
   { href: "/methodology", label: "Methodology", ready: true },
   { href: "/docs", label: "API", ready: true },

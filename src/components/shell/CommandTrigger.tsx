@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useWalletConnected } from "@/lib/walletFlag";
 
 interface Cmd {
   id: string;
@@ -25,6 +26,7 @@ const PAGES: { label: string; href: string; hint: string }[] = [
 // and fully accessible. This single interaction reads "precision instrument."
 export default function CommandTrigger() {
   const router = useRouter();
+  const connected = useWalletConnected();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -66,13 +68,14 @@ export default function CommandTrigger() {
       out.push({ id: `wallet-${q}`, label: `Look up wallet ${q}`, hint: "wallet", run: () => go(`/wallet/${q}`) });
     }
     const lc = q.toLowerCase();
-    for (const p of PAGES) {
+    const pages = connected ? [{ label: "Your stable", href: "/stable", hint: "page" }, ...PAGES] : PAGES;
+    for (const p of pages) {
       if (!q || p.label.toLowerCase().includes(lc)) {
         out.push({ id: `page-${p.href}`, label: p.label, hint: p.hint, run: () => go(p.href) });
       }
     }
     return out;
-  }, [query, go]);
+  }, [query, go, connected]);
 
   useEffect(() => { setActive(0); }, [query]);
 

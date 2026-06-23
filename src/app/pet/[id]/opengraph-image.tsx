@@ -99,7 +99,7 @@ export default async function Image({ params }: { params: { id: string } }) {
             <Stat label="CONFIRMED" value={d.scores.confirmedQuality.toFixed(1)} color={OG_COLORS.gold} />
             <Stat label="UPSIDE" value={d.scores.upside.toFixed(1)} color={OG_COLORS.cyan} />
             <Stat label="BEST" value={`${d.scores.bestDistance}m`} color={OG_COLORS.glow} />
-            <Stat label="WIN RATE" value={`${Math.round(d.shark.shrunkWinRate * 100)}%`} color={OG_COLORS.green} />
+            <Stat label="WIN RATE" value={d.shark.racesRun ? `${Math.round((d.shark.wins / d.shark.racesRun) * 100)}%` : "0%"} color={OG_COLORS.green} />
           </div>
           <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 1 }}>
             a Patch Notes product

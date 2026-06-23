@@ -121,7 +121,7 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
       {/* Board-level honesty caveat, surfaced once rather than per card. */}
       {personalized && (
         <p className="type-micro mb-4 normal-case text-ink-faint">
-          Edges are Paddock model estimates shown as bands, not yet calibrated at these odds, never a guarantee.
+          Edges are Paddock model estimates shown as bands, not yet calibrated at these odds.
         </p>
       )}
 

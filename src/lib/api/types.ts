@@ -90,9 +90,18 @@ export interface PetDossier {
   };
   shark: SharkProfile;
   valuation: ValuationBandDTO;
+  recentSales: SaleCompDTO[]; // the most recent real comparable sales (rarity-matched, else collection-wide)
+  recentSalesWidened: boolean; // true when recentSales are collection-wide, not rarity-matched
   recentRaces: RaceHistoryItem[];
   records: PetDistanceRecord[]; // this horse's best time per distance where it ranks
   meta: { lastSyncedAt: string | null; source: string };
+}
+
+// One real comparable sale, from the marketplace sales pool. Never fabricated.
+export interface SaleCompDTO {
+  tokenId: number;
+  priceEth: number;
+  soldAt: string;
 }
 
 // A horse's best finish at one distance, with its rank on the records board.

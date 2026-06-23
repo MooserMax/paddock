@@ -12,7 +12,7 @@ import TraitRow from "@/components/dossier/TraitRow";
 import TrackFitBars from "@/components/dossier/TrackFitBars";
 import OwnerLabel from "@/components/OwnerLabel";
 import { STAT_LABEL, TRACK_LABEL } from "@/lib/display";
-import { formatEth, formatPct, formatScore, formatRaceTime, ordinal } from "@/lib/format";
+import { formatEth, formatPct, formatScore, formatRaceTime, ordinal, timeAgo } from "@/lib/format";
 
 export const revalidate = 120;
 
@@ -107,8 +107,8 @@ export default async function PetPage({ params }: { params: { id: string } }) {
         <ScoreCell label="Best distance" value={`${d.scores.bestDistance}m`} sub={TRACK_LABEL[d.scores.bestDistance]?.split(" ")[1] ?? ""} accent="var(--glow)" />
         <ScoreCell
           label="Win rate"
-          value={formatPct(d.shark.shrunkWinRate)}
-          sub={d.shark.racesRun ? `shrunk · ${d.shark.wins}/${d.shark.racesRun} raw` : "no races yet"}
+          value={d.shark.racesRun ? formatPct(d.shark.wins / d.shark.racesRun) : "0%"}
+          sub={d.shark.racesRun ? `${d.shark.wins} of ${d.shark.racesRun}` : "no races yet"}
           accent="var(--green)"
         />
       </div>
@@ -186,6 +186,25 @@ export default async function PetPage({ params }: { params: { id: string } }) {
                   </span>
                 )}
                 <p className="type-micro mt-1.5 normal-case text-ink-faint">{d.valuation.note}</p>
+              </div>
+            )}
+
+            {/* The most recent real sales, more actionable than the band alone. */}
+            {d.recentSales.length > 0 && (
+              <div className="mt-4 border-t pt-3 hairline">
+                <p className="type-micro uppercase tracking-wider text-ink-faint">{d.recentSalesWidened ? "Recent collection sales" : "Recent comparable sales"}</p>
+                <ul className="mt-2 space-y-1.5">
+                  {d.recentSales.map((s) => (
+                    <li key={`${s.tokenId}-${s.soldAt}`} className="flex items-baseline justify-between gap-3">
+                      <Link href={`/pet/${s.tokenId}`} className="type-data text-ink-soft transition-paddock hover:text-glow">#{s.tokenId}</Link>
+                      <span className="type-data tabular-nums text-ink">{formatEth(s.priceEth, 4)}</span>
+                      <span className="type-micro normal-case text-ink-faint">{timeAgo(s.soldAt)}</span>
+                    </li>
+                  ))}
+                </ul>
+                {d.recentSalesWidened && (
+                  <p className="type-micro mt-1.5 normal-case text-ink-faint">Not rarity-matched; shown because comps for this rarity are thin.</p>
+                )}
               </div>
             )}
           </Panel>

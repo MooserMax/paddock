@@ -34,7 +34,7 @@ export default function SingleHorseRead({ pet, track }: { pet: PetDossier; track
           <Stat label="Confirmed quality" value={formatScore(pet.scores.confirmedQuality)} accent="var(--gold)" />
           <Stat label="Upside" value={formatScore(pet.scores.upside)} accent="var(--cyan)" />
           <Stat label={`Fit at ${track}m`} value={formatScore(fit)} accent={fitsHere ? "var(--glow)" : "var(--ink-soft)"} />
-          <Stat label="Win rate" value={pet.shark.racesRun ? formatPct(pet.shark.shrunkWinRate) : "no races"} accent="var(--green)" />
+          <Stat label="Win rate" value={pet.shark.racesRun ? `${formatPct(pet.shark.wins / pet.shark.racesRun)}, ${pet.shark.wins} of ${pet.shark.racesRun}` : "0%, no races"} accent="var(--green)" />
         </dl>
       </Panel>
 

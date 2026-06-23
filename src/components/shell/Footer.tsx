@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { api } from "@/lib/api/client";
-import { NAV_ROUTES } from "@/lib/nav";
+import { DOCS_ROUTES } from "@/lib/nav";
 import { timeAgo } from "@/lib/format";
 
 // Footer links derive from the route registry (ready routes only, never a dead
@@ -19,7 +19,7 @@ export default async function Footer() {
     // freshness line simply omits if stats are unavailable
   }
 
-  const footerLinks = NAV_ROUTES.filter((r) => r.ready && (r.href === "/methodology" || r.href === "/docs"));
+  const footerLinks = DOCS_ROUTES.filter((r) => r.ready && (r.href === "/methodology" || r.href === "/docs"));
 
   return (
     <footer className="mt-24 border-t hairline">

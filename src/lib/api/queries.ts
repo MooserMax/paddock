@@ -107,10 +107,23 @@ export async function getPetDossier(id: number): Promise<PetDossier | null> {
   });
 
   const rawWinRate = pet.races_run ? pet.wins / pet.races_run : null;
-  const valComps = (score?.valuation_comps ?? {}) as { thin?: boolean; note?: string; comps?: unknown[] };
+  const valComps = (score?.valuation_comps ?? {}) as { thin?: boolean; note?: string; comps?: { tokenId: number; priceEth: number; soldAt: string }[] };
   const ownerName = await lookupUsername(pet.owner_address);
   const recWrap = await recordsBlob();
   const records = recWrap ? petRecordsFromBlob(recWrap.blob, id) : [];
+
+  // Recent comparable sales: the per-pet valuation comps are already real,
+  // rarity-matched, and newest-first, so the most recent 3 come straight from them.
+  // If there are no rarity-matched comps, widen to recent collection sales and label
+  // it; never mix the two, never fabricate a price.
+  const matchedComps = Array.isArray(valComps.comps) ? valComps.comps : [];
+  let recentSales = matchedComps.slice(0, 3).map((c) => ({ tokenId: c.tokenId, priceEth: c.priceEth, soldAt: c.soldAt }));
+  let recentSalesWidened = false;
+  if (recentSales.length === 0) {
+    const { data: coll } = await db().from("sales").select("token_id, price_eth, sold_at").not("price_eth", "is", null).order("sold_at", { ascending: false }).limit(3);
+    recentSales = (coll ?? []).map((s) => ({ tokenId: s.token_id as number, priceEth: Number(s.price_eth), soldAt: s.sold_at as string }));
+    recentSalesWidened = recentSales.length > 0;
+  }
 
   return {
     id: pet.id,
@@ -161,6 +174,8 @@ export async function getPetDossier(id: number): Promise<PetDossier | null> {
       lowConfidence: !(valComps.thin ?? true) && (Array.isArray(valComps.comps) ? valComps.comps.length : 0) < 5,
       note: valComps.note ?? "No valuation computed yet.",
     },
+    recentSales,
+    recentSalesWidened,
     recentRaces,
     records,
     meta: { lastSyncedAt: pet.last_synced_at, source: SOURCE },
