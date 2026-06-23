@@ -44,6 +44,26 @@ export function entryValueWei(entryFeeWei: string | null | undefined): bigint {
   return 0n;
 }
 
+// Paid entry is BUILT but HARD-DISABLED. This flag and the throw in entryValueWei
+// keep the enabled path free-only until a human review approves flipping it.
+export const PAID_ENTRY_ENABLED = false;
+
+// Validated paid entry value. Derived from real paid joins and proven by simulation
+// across multiple fee tiers and both juiced states (no spend): the value is the
+// entry fee plus the PROTOCOL fee, and the protocol rate depends on juiced state,
+// protocolFeeBps when not juiced, protocolFeeBpsJuiced when juiced. The contract
+// requires the EXACT value (overpaying also reverts), so the juiced flag must be
+// right. Paddock entries are never juiced (the third param is always empty), so the
+// non-juiced rate applies. Evidence: race 13374 non-juiced fee 5e14 -> 5.15e14 (3%
+// = protocolFeeBps 300); race 13133 juiced fee 5e14 -> 5.05e14 (1% =
+// protocolFeeBpsJuiced 100); race 13319 juiced fee 2.5e15 -> 2.525e15. This is NOT
+// wired into the live path; it exists so the paid machinery is ready and tested.
+export function paidEntryValueWei(entryFeeWei: string, protocolFeeBps: number, protocolFeeBpsJuiced: number, juiced: boolean): bigint {
+  const fee = BigInt(entryFeeWei);
+  const rate = BigInt(juiced ? protocolFeeBpsJuiced : protocolFeeBps);
+  return fee + (fee * rate) / 10000n;
+}
+
 export interface JoinTx {
   to: Hex;
   data: Hex;
