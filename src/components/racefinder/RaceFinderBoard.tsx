@@ -125,16 +125,18 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
         </p>
       )}
 
-      {/* Daily eligibility: never recommend a horse that has raced its daily limit. */}
+      {/* Eligibility: never recommend a horse the user cannot enter now. The
+          contract reverts both for the daily race limit and for a horse already in
+          a race, so the copy covers both honestly. */}
       {personalized && data?.roster?.allExhausted && (
         <div className="panel mb-4 p-4">
-          <p className="type-card-title text-ink">Your horses are resting</p>
-          <p className="type-body mt-1 text-ink-soft">All of your Giglings have raced their daily limit, so there is no entry to recommend right now. They can race again once the limit resets.</p>
+          <p className="type-card-title text-ink">Your horses cannot enter right now</p>
+          <p className="type-body mt-1 text-ink-soft">Each of your Giglings has either raced its daily limit or is already in a race, so there is no entry to recommend. Check back shortly.</p>
         </div>
       )}
       {personalized && data?.roster && !data.roster.allExhausted && data.roster.exhausted.length > 0 && (
         <p className="type-micro mb-4 normal-case text-ink-faint">
-          Resting, daily limit reached: {data.roster.exhausted.map((p) => p.name ?? `#${p.petId}`).join(", ")}. Recommending from your horses that can still race.
+          Cannot enter right now, daily limit reached or already racing: {data.roster.exhausted.map((p) => p.name ?? `#${p.petId}`).join(", ")}. Recommending from your horses that can still race.
         </p>
       )}
 
