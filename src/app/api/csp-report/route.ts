@@ -17,8 +17,11 @@ export async function POST(req: NextRequest) {
     const report = body?.["csp-report"] ?? (Array.isArray(body) ? body[0]?.body : body) ?? {};
     const blocked = report["blocked-uri"] ?? report.blockedURL ?? "unknown";
     const directive = report["violated-directive"] ?? report.effectiveDirective ?? "unknown";
-    // A single concise line; deliberately not the full report, no bodies, no PII.
-    console.warn(`[csp-report] directive=${directive} blocked=${blocked}`);
+    const document = report["document-uri"] ?? report.documentURL ?? "unknown";
+    // Structured, greppable, and non-sensitive (no request bodies, no PII). A live
+    // connect+sign session reads these from the Vercel runtime logs to enumerate
+    // every origin the wallet flow needs before enforcing.
+    console.warn(`[csp-report] ${new Date().toISOString()} directive=${directive} blocked=${blocked} document=${document}`);
   } catch {
     // Never fail a report submission.
   }

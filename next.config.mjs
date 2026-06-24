@@ -24,29 +24,10 @@ const nextConfig = {
 
   // Security headers. The safe hardening headers are ENFORCED globally (they match
   // Gigaverse's HTTPS/HSTS floor and exceed it with nosniff, frame denial, and a
-  // tight referrer policy). The CSP is staged in Report-Only so it can be validated
-  // against real AGW/Privy signing traffic by the security review gate BEFORE it is
-  // enforced; in report-only it cannot break the read-only board or the signing
-  // path. The review then moves script-src to nonce-based 'self' and enforces.
+  // tight referrer policy. The Content-Security-Policy itself is NOT set here: it
+  // needs a per-request nonce, so it is built in src/proxy.ts from the single source
+  // in src/lib/csp.ts. These remaining headers are static and safe to set here.
   async headers() {
-    const csp = [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: https://*.mypinata.cloud https://i.seadn.io https://*.seadn.io",
-      "font-src 'self' data:",
-      // Same-origin API plus the Abstract RPC and the AGW/Privy auth origins the
-      // wallet client talks to from the browser. No other connect targets.
-      "connect-src 'self' https://api.mainnet.abs.xyz https://*.abs.xyz https://auth.privy.io https://*.privy.io wss://*.privy.io",
-      "frame-src 'self' https://auth.privy.io https://*.privy.io https://*.abs.xyz",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-      "object-src 'none'",
-      // Collect real violations so a browser AGW/Privy connect session enumerates
-      // the dynamic origins the wallet flow needs, the input to the enforced policy.
-      "report-uri /api/csp-report",
-    ].join("; ");
     return [
       {
         source: "/:path*",
@@ -56,7 +37,6 @@ const nextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-          { key: "Content-Security-Policy-Report-Only", value: csp },
         ],
       },
     ];

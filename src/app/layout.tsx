@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Crimson_Pro, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Nav from "@/components/shell/Nav";
@@ -47,13 +48,16 @@ export const metadata: Metadata = {
 // preference of "light" switches to the cream paper mode.
 const themeScript = `(function(){try{var t=localStorage.getItem('paddock-theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();`;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  // The per-request nonce the proxy set; tags the inline theme script so it runs
+  // under the nonce-based CSP without script 'unsafe-inline'.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className={`${crimson.variable} ${jetbrains.variable} bg-aurora`}>
         <div className="flex min-h-screen flex-col">
