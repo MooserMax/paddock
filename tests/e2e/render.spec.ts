@@ -6,10 +6,10 @@ const DEMO_WALLET = "0xA8A956a5690cc81bB367DA2C2f6f1796Be2B3C30";
 // and we capture a full-page screenshot per viewport so the 380px mobile claim
 // is verifiable, not asserted. Empty and error states are covered too.
 const PAGES = [
-  { path: "/", name: "home", expect: "One verified engine" },
+  { path: "/", name: "home", expect: "The open intelligence layer" },
   { path: "/pet/6249", name: "dossier", expect: "Confirmed quality" },
   { path: `/wallet/${DEMO_WALLET}`, name: "wallet", expect: "Estimated stable value" },
-  { path: "/scanner?race=5667&mark=6249", name: "scanner", expect: "2 sharks and a top-2 payout" },
+  { path: "/scanner?race=5667&mark=6249", name: "scanner", expect: "Should you enter?" },
   { path: "/races", name: "races", expect: "Recent races" },
   { path: "/calibration", name: "calibration", expect: "The model grades itself" },
   { path: "/leaderboards", name: "leaderboards", expect: "Ranked from our database" },
