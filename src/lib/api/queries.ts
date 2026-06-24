@@ -1205,7 +1205,7 @@ export async function getRecords(trackParam: number | null, mode: RecordMode, wi
 import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge, RaceTrackingDTO, RaceTrackEntrant } from "./types";
 import { getOpenLobbies, POLL_MS, type OpenLobby } from "../lobbies";
 import { fetchRace } from "../gigaverse";
-import { eligiblePets } from "../eligibility";
+import { dailyExhausted } from "../raceLimit";
 
 const LOBBY_NOTE =
   "Live forming lobbies, polled politely and cached a few seconds, so the data may lag a little. Your edge is an estimate for the field as it stands, and it shifts as horses enter; it is not a guarantee.";
@@ -1283,15 +1283,22 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
   }
   const personalized = candidateIds.length > 0;
 
-  // Daily eligibility: a pet that has hit its on-chain daily race limit (or is busy
-  // in another race) cannot enter, so it must not be recommended. Authoritative via
-  // contract simulation, the same check the entry guard uses; cached per pet. We
-  // probe against any current open lobby since eligibility is race-independent.
-  let exhausted = new Set<number>();
-  if (personalized && wallet && open.length > 0) {
-    const elig = await eligiblePets(wallet, open[0].raceId, candidateIds);
-    exhausted = new Set(candidateIds.filter((id) => !elig.has(id)));
+  // Eligibility, computed from STABLE signals so the recommendation does not flicker:
+  //  - resting: hit the daily race limit, a per-pet event-count verdict that does not
+  //    depend on any one race's joinability (the old per-race joinRace simulation
+  //    conflated full or mid-transition races with exhaustion and oscillated).
+  //  - racing: currently entered in a forming lobby, so busy and unable to join
+  //    another race right now, derived from the live snapshot, also stable.
+  // A pet is recommendable only if it is neither. Resting takes precedence in
+  // labeling (done for the day, not just momentarily busy).
+  let resting = new Set<number>();
+  let racing = new Set<number>();
+  if (personalized) {
+    resting = await dailyExhausted(candidateIds);
+    const inOpen = new Set(open.flatMap((l) => l.entries.map((e) => e.petId)));
+    racing = new Set(candidateIds.filter((id) => inOpen.has(id) && !resting.has(id)));
   }
+  const unavailable = new Set<number>([...resting, ...racing]);
 
   // Resolve strength for every entered horse + the candidates in one batch.
   const allIds = [...open.flatMap((l) => l.entries.map((e) => e.petId)), ...candidateIds];
@@ -1329,8 +1336,9 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
     let edge: LobbyEdge | null = null;
     if (personalized) {
       const fieldInputs = l.entries.map((e) => { const s = strength.get(e.petId); return s ? oddsInput(e.petId, s, l.trackLength) : null; }).filter((x): x is NonNullable<typeof x> => x != null);
-      // Exclude exhausted pets: never recommend a horse the user cannot enter today.
-      const eligible = candidateIds.filter((id) => strength.has(id) && !l.entries.some((e) => e.petId === id) && !exhausted.has(id));
+      // Never recommend a horse the user cannot enter: resting (daily limit) or
+      // racing (busy in another forming race), both stable signals.
+      const eligible = candidateIds.filter((id) => strength.has(id) && !l.entries.some((e) => e.petId === id) && !unavailable.has(id));
       let best: { petId: number; pWin: number } | null = null;
       for (const id of eligible) {
         const s = strength.get(id)!;
@@ -1363,14 +1371,15 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
   // Rank by the user's win edge when personalized, else newest/most-open first.
   if (personalized) rows.sort((a, b) => (b.edge?.pWin ?? -1) - (a.edge?.pWin ?? -1));
 
-  // Roster eligibility summary, so the board can mark resting horses and, when every
-  // candidate has raced its daily limit, say so honestly rather than recommend a
-  // doomed entry. Only meaningful when there were open lobbies to probe against.
-  const roster = personalized && open.length > 0
+  // Roster eligibility summary, two stable states like dagrid: resting (used the
+  // daily limit) and racing (busy in a race now). allUnavailable is honest when no
+  // horse can be entered, instead of recommending a doomed entry.
+  const roster = personalized
     ? {
-        eligibleCount: candidateIds.length - exhausted.size,
-        allExhausted: candidateIds.length > 0 && exhausted.size === candidateIds.length,
-        exhausted: [...exhausted].map((id) => ({ petId: id, name: strength.get(id)?.name ?? null })),
+        eligibleCount: candidateIds.length - unavailable.size,
+        allUnavailable: candidateIds.length > 0 && unavailable.size === candidateIds.length,
+        resting: [...resting].map((id) => ({ petId: id, name: strength.get(id)?.name ?? null })),
+        racing: [...racing].map((id) => ({ petId: id, name: strength.get(id)?.name ?? null })),
       }
     : null;
 

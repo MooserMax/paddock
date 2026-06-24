@@ -125,18 +125,23 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
         </p>
       )}
 
-      {/* Eligibility: never recommend a horse the user cannot enter now. The
-          contract reverts both for the daily race limit and for a horse already in
-          a race, so the copy covers both honestly. */}
-      {personalized && data?.roster?.allExhausted && (
+      {/* Eligibility: two stable states. Resting horses have used their daily race
+          limit; racing horses are busy in a race now. Neither is recommended. */}
+      {personalized && data?.roster?.allUnavailable && (
         <div className="panel mb-4 p-4">
-          <p className="type-card-title text-ink">Your horses cannot enter right now</p>
-          <p className="type-body mt-1 text-ink-soft">Each of your Giglings has either raced its daily limit or is already in a race, so there is no entry to recommend. Check back shortly.</p>
+          <p className="type-card-title text-ink">No horse to enter right now</p>
+          <p className="type-body mt-1 text-ink-soft">
+            {data.roster.racing.length > 0 && data.roster.resting.length === 0
+              ? "All of your Giglings are racing right now. They are free to enter again as soon as those races finish."
+              : "All of your Giglings have used their daily race limit, so there is no entry to recommend. They can race again once the daily limit resets."}
+          </p>
         </div>
       )}
-      {personalized && data?.roster && !data.roster.allExhausted && data.roster.exhausted.length > 0 && (
+      {personalized && data?.roster && !data.roster.allUnavailable && (data.roster.resting.length > 0 || data.roster.racing.length > 0) && (
         <p className="type-micro mb-4 normal-case text-ink-faint">
-          Cannot enter right now, daily limit reached or already racing: {data.roster.exhausted.map((p) => p.name ?? `#${p.petId}`).join(", ")}. Recommending from your horses that can still race.
+          {data.roster.resting.length > 0 ? `Used their daily limit: ${data.roster.resting.map((p) => p.name ?? `#${p.petId}`).join(", ")}. ` : ""}
+          {data.roster.racing.length > 0 ? `Racing right now, free shortly: ${data.roster.racing.map((p) => p.name ?? `#${p.petId}`).join(", ")}. ` : ""}
+          Recommending from your horses that can still race.
         </p>
       )}
 

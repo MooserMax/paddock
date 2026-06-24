@@ -170,6 +170,35 @@ export async function fetchLobbyLogs(
   }
 }
 
+// eth_getLogs for RACE_JOINED only, over a block range, with the same halving
+// fallback. topic2 is the petId. Used to count a pet's races in the trailing daily
+// window for a stable daily-limit verdict that does not flicker.
+export async function fetchJoinedLogs(
+  fromBlock: bigint,
+  toBlock: bigint
+): Promise<RawLog[]> {
+  if (fromBlock > toBlock) return [];
+  try {
+    return (await chainClient().request({
+      method: "eth_getLogs",
+      params: [
+        {
+          address: PETRACING_CONTRACT as Hex,
+          fromBlock: `0x${fromBlock.toString(16)}`,
+          toBlock: `0x${toBlock.toString(16)}`,
+          topics: [[TOPIC_RACE_JOINED]],
+        },
+      ],
+    })) as RawLog[];
+  } catch (err) {
+    if (toBlock - fromBlock < 200n) throw err;
+    const mid = fromBlock + (toBlock - fromBlock) / 2n;
+    const left = await fetchJoinedLogs(fromBlock, mid);
+    const right = await fetchJoinedLogs(mid + 1n, toBlock);
+    return [...left, ...right];
+  }
+}
+
 // Standard ERC-721 Transfer(address indexed from, address indexed to, uint256
 // indexed tokenId). Used to keep pet ownership in sync with on-chain reality.
 export const TOPIC_ERC721_TRANSFER =
