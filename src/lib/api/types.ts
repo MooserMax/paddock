@@ -381,6 +381,10 @@ export interface LobbyResponse {
   fetchedAt: string | null;
   delayed: boolean; // live upstream is throttled, snapshot may be stale
   pollMs: number; // suggested client poll interval
+  // Daily race eligibility of the user's roster. exhausted horses have hit the
+  // on-chain daily limit (or are busy) and cannot enter, so they are never
+  // recommended; allExhausted is honest about there being no enterable play.
+  roster: { eligibleCount: number; allExhausted: boolean; exhausted: { petId: number; name: string | null }[] } | null;
   meta: { source: string; note: string };
 }
 
