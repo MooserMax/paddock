@@ -20,7 +20,8 @@ interface SP {
   mark?: string;
 }
 
-export default async function ScannerPage({ searchParams }: { searchParams: SP }) {
+export default async function ScannerPage(props: { searchParams: Promise<SP> }) {
+  const searchParams = await props.searchParams;
   const mark = searchParams.mark ? Number(searchParams.mark) : undefined;
   const track = Number(searchParams.track ?? 1200);
   let result: RaceDetail | null = null;

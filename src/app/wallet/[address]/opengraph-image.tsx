@@ -31,9 +31,10 @@ async function imageDataUrl(url: string | null | undefined): Promise<string | nu
 // small supporting stats, and the stable's top-by-cq horse as the character,
 // over hard Paddock branding. Honest states: ranked (percentile hero), limited
 // (holdings hero, no rank claim), none (holdings hero, reveal prompt).
-export default async function Image({ params }: { params: { address: string } }) {
+export default async function Image({ params }: { params: Promise<{ address: string }> }) {
+  const { address: rawAddress } = await params; // params is a Promise in Next 16
   const fonts = await ogFonts();
-  const address = decodeURIComponent(params.address);
+  const address = decodeURIComponent(rawAddress);
   const s = await getWalletSummary(address).catch(() => null);
 
   const name = s ? ownerDisplay(s.name, s.address) : address.slice(0, 6) + "..." + address.slice(-4);

@@ -15,7 +15,8 @@ export function OPTIONS() {
 // CLIENT polls this every few seconds and stops at phase 3; this handler fetches on
 // demand (no server background refresh) and the short s-maxage fans repeat viewers
 // of the same race out to one upstream read. Read-only, no signature.
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const limited = rateLimit(req);
   if (limited) return limited;
 

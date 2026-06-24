@@ -14,10 +14,11 @@ import { resolveOwnerName } from "@/lib/accounts";
 export const revalidate = 60;
 
 interface PageProps {
-  params: { address: string };
+  params: Promise<{ address: string }>;
 }
 
-export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+export async function generateMetadata(props: PageProps): Promise<Metadata> {
+  const params = await props.params;
   const addr = decodeURIComponent(params.address);
   const label = await resolveOwnerName(addr); // username when known, else truncated
   const ogImage = `/wallet/${addr}/opengraph-image`;
@@ -32,7 +33,8 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function WalletPage({ params }: PageProps) {
+export default async function WalletPage(props: PageProps) {
+  const params = await props.params;
   const address = decodeURIComponent(params.address);
 
   let summary: WalletSummary | null = null;

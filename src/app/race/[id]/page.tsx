@@ -9,11 +9,16 @@ import { formatPct } from "@/lib/format";
 
 export const revalidate = 60;
 
-export async function generateMetadata({ params }: { params: { id: string } }): Promise<Metadata> {
+export async function generateMetadata(props: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const params = await props.params;
   return { title: `Race #${params.id}`, description: `Scanner verdict and odds for Gigling race #${params.id}.` };
 }
 
-export default async function RacePage({ params, searchParams }: { params: { id: string }; searchParams: { mark?: string } }) {
+export default async function RacePage(
+  props: { params: Promise<{ id: string }>; searchParams: Promise<{ mark?: string }> }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const mark = searchParams.mark ? Number(searchParams.mark) : undefined;
   let race: RaceDetail | null = null;
   try {

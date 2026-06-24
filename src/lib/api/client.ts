@@ -21,14 +21,14 @@ import type {
 // base from the incoming request; the browser uses a relative path. Either way
 // every page's data comes through /api/v1, provable in the network tab.
 
-function serverBase(): string {
-  const h = headers();
+async function serverBase(): Promise<string> {
+  const h = await headers(); // async in Next 16
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   return `${proto}://${host}`;
 }
 
-function apiBase(): string {
+async function apiBase(): Promise<string> {
   // In a browser bundle, window exists and relative URLs hit our own origin.
   if (typeof window !== "undefined") return "";
   return serverBase();
@@ -47,7 +47,7 @@ interface FetchOpts {
 }
 
 async function apiGet<T>(path: string, opts: FetchOpts = {}): Promise<T> {
-  const url = `${apiBase()}/api/v1${path}`;
+  const url = `${await apiBase()}/api/v1${path}`;
   const init: RequestInit & { next?: { revalidate: number } } = { signal: opts.signal };
   if (typeof window === "undefined" && opts.revalidate !== undefined) {
     init.next = { revalidate: opts.revalidate };

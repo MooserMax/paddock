@@ -9,7 +9,8 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default function RaceFinderPage({ searchParams }: { searchParams: { wallet?: string } }) {
+export default async function RaceFinderPage(props: { searchParams: Promise<{ wallet?: string }> }) {
+  const searchParams = await props.searchParams;
   const wallet = searchParams.wallet && /^0x[0-9a-fA-F]{40}$/.test(searchParams.wallet) ? searchParams.wallet : "";
 
   return (

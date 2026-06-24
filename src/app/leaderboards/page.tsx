@@ -22,7 +22,8 @@ const METRICS: { key: LeaderboardMetric; label: string }[] = [
   { key: "upside", label: "Upside" },
 ];
 
-export default async function LeaderboardsPage({ searchParams }: { searchParams: { metric?: string } }) {
+export default async function LeaderboardsPage(props: { searchParams: Promise<{ metric?: string }> }) {
+  const searchParams = await props.searchParams;
   const metric = (METRICS.find((m) => m.key === searchParams.metric)?.key ?? "cq") as LeaderboardMetric;
   let board: LeaderboardResponse | null = null;
   try {

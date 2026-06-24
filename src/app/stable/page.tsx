@@ -9,7 +9,8 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default function StablePage({ searchParams }: { searchParams: { address?: string } }) {
+export default async function StablePage(props: { searchParams: Promise<{ address?: string }> }) {
+  const searchParams = await props.searchParams;
   const address = searchParams.address && /^0x[0-9a-fA-F]{40}$/.test(searchParams.address) ? searchParams.address : "";
 
   return (

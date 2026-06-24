@@ -9,9 +9,10 @@ export const alt = "Paddock Gigling dossier";
 
 const STAT_ACCENT = [OG_COLORS.cyan, OG_COLORS.glow, OG_COLORS.green, OG_COLORS.gold];
 
-export default async function Image({ params }: { params: { id: string } }) {
+export default async function Image({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params; // params is a Promise in Next 16
   const fonts = await ogFonts();
-  const d = await getPetDossier(Number(params.id)).catch(() => null);
+  const d = await getPetDossier(Number(id)).catch(() => null);
 
   if (!d) {
     return new ImageResponse(

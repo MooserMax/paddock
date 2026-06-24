@@ -25,7 +25,8 @@ async function load(id: string): Promise<PetDossier | null> {
   }
 }
 
-export async function generateMetadata({ params }: { params: { id: string } }): Promise<Metadata> {
+export async function generateMetadata(props: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const params = await props.params;
   const dossier = await load(params.id);
   if (!dossier) return { title: "Gigling not found" };
   const desc = `${dossier.rarity.name} Gigling. Confirmed quality ${formatScore(dossier.scores.confirmedQuality)}, ${formatPct(dossier.revealPct)} revealed, best at ${dossier.scores.bestDistance}m.`;
@@ -44,7 +45,8 @@ const STAT_ACCENT: Record<string, string> = {
   finish: "var(--gold)",
 };
 
-export default async function PetPage({ params }: { params: { id: string } }) {
+export default async function PetPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const d = await load(params.id);
   if (!d) notFound();
 

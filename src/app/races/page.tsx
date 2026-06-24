@@ -14,7 +14,8 @@ export const revalidate = 30;
 
 const TRACKS = [500, 1200, 2400, 3000];
 
-export default async function RacesPage({ searchParams }: { searchParams: { track?: string } }) {
+export default async function RacesPage(props: { searchParams: Promise<{ track?: string }> }) {
+  const searchParams = await props.searchParams;
   const track = searchParams.track && TRACKS.includes(Number(searchParams.track)) ? Number(searchParams.track) : null;
   let feed: RaceListResponse | null = null;
   try {

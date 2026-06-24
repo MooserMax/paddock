@@ -39,7 +39,8 @@ function Chip({ href, active, label, dim }: { href: string; active: boolean; lab
 
 interface SP { track?: string; mode?: string; window?: string; all?: string }
 
-export default async function RecordsPage({ searchParams }: { searchParams: SP }) {
+export default async function RecordsPage(props: { searchParams: Promise<SP> }) {
+  const searchParams = await props.searchParams;
   const reqTrack = searchParams.track ? Number(searchParams.track) : null;
   const reqMode = (MODES.find((m) => m.key === searchParams.mode)?.key ?? "adjusted") as RecordMode;
   const reqWindow = (WINDOWS.find((w) => w.key === searchParams.window)?.key ?? "all") as RecordWindow;

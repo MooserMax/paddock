@@ -9,7 +9,8 @@ export function OPTIONS() {
   return preflight();
 }
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const limited = rateLimit(req);
   if (limited) return limited;
 
