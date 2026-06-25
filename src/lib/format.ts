@@ -15,6 +15,19 @@ export function ownerDisplay(username: string | null | undefined, address: strin
   return u && u.length > 0 ? u : shortAddress(address);
 }
 
+// Honest freshness label for a paddock-db "as of" timestamp. Shows local HH:MM, and
+// a relative "(Nm ago)" when the data is meaningfully old, so a lagging view reads as
+// dated rather than silently live. Client-only (uses Date.now); safe in components.
+export function asOfLabel(iso: string | null | undefined): string {
+  if (!iso) return "unknown";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "unknown";
+  const hhmm = new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins >= 2) return `${hhmm} (${mins}m ago)`;
+  return hhmm;
+}
+
 export function formatEth(value: number | null | undefined, places = 4): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "unknown";
   return `${value.toFixed(places)} ETH`;

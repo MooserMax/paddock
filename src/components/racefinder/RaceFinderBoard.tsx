@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAccount } from "wagmi";
 import type { LobbyResponse, LobbyRow } from "@/lib/api/types";
 import RarityBadge from "@/components/RarityBadge";
-import { formatEth, formatInt } from "@/lib/format";
+import { formatEth, formatInt, asOfLabel } from "@/lib/format";
 import { ConnectBar, EntryButton } from "./EntryControls";
 
 // The live, ranked decision board. Polls /api/v1/lobbies on the polite interval
@@ -110,6 +110,7 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
             <>
               <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full animate-pulse-soft" style={{ background: data.delayed ? "var(--gold)" : "var(--green)" }} aria-hidden />
               {data.delayed ? "Live data delayed, " : "Live, "}updated {secondsAgo(data.fetchedAt)}, refreshes every 4s
+              {data.asOf ? `, results as of ${asOfLabel(data.asOf)}` : ""}
             </>
           ) : "Loading live lobbies"}
         </span>

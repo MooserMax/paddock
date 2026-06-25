@@ -21,6 +21,15 @@ import type {
 
 const SOURCE = "paddock-db";
 
+// The honest "data as of" timestamp for paddock-db-backed views: the last time the
+// incremental ingest cycle completed (it touches the races_scan row's updated_at on
+// every successful run). Surfacing this lets the UI show "as of HH:MM" so a lagging
+// view reads as honestly-dated rather than silently stale. Null if never run.
+async function ingestAsOf(): Promise<string | null> {
+  const { data } = await db().from("sync_state").select("updated_at").eq("key", "races_scan").maybeSingle();
+  return (data?.updated_at as string) ?? null;
+}
+
 function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x;
 }
@@ -390,6 +399,7 @@ export async function getWalletSummary(address: string): Promise<WalletSummary> 
     revealQueue,
     trackAssignments,
     flags,
+    asOf: await ingestAsOf(),
     meta: { source: SOURCE, refreshing: false },
   };
 }
@@ -496,6 +506,7 @@ export async function getRaceDetail(id: number, markedPetId?: number): Promise<R
     resolvedAt: race.resolved_at,
     entrants,
     verdict,
+    asOf: await ingestAsOf(),
     meta: { source: SOURCE, eloThreshold: threshold },
   };
 }
@@ -985,6 +996,7 @@ export async function getScan(petIds: number[], trackLength: number, markedPetId
     resolvedAt: null,
     entrants,
     verdict,
+    asOf: await ingestAsOf(),
     meta: { source: SOURCE, eloThreshold: threshold },
   };
 }
@@ -1265,8 +1277,24 @@ function oddsInput(petId: number, s: Strength, track: number) {
 // roster's top horses; pet scores one horse. Read-only: no wallet signature, only
 // a public address.
 export async function getLobbies(walletParam: string | null, petParam: number | null): Promise<LobbyResponse> {
-  const { lobbies: open, fetchedAt, delayed } = await getOpenLobbies();
+  const { lobbies: openRaw, racingByPet, fetchedAt, delayed } = await getOpenLobbies();
   const wallet = walletParam?.toLowerCase() ?? null;
+
+  // Cross-check the in-process chain snapshot against the FRESH resolved-state in
+  // paddock-db (the same races table race-detail reads, refreshed every ingest cycle
+  // from a bulk chain scan). A per-serverless-instance snapshot can get stuck and keep
+  // showing a race as forming / a horse as racing well after it resolved on-chain;
+  // dropping anything the DB marks resolved bounds Race Finder staleness to the ingest
+  // cadence and keeps it consistent with race-detail. Bounded id set, one indexed read.
+  const snapshotRaceIds = [...new Set([...openRaw.map((l) => l.raceId), ...Object.values(racingByPet)])];
+  let resolvedRaceIds = new Set<number>();
+  if (snapshotRaceIds.length) {
+    const { data: resolvedRows } = await db()
+      .from("races").select("race_id").in("race_id", snapshotRaceIds).eq("resolved", true);
+    resolvedRaceIds = new Set((resolvedRows ?? []).map((r) => r.race_id as number));
+  }
+  const open = openRaw.filter((l) => !resolvedRaceIds.has(l.raceId));
+  const asOf = await ingestAsOf();
 
   // Candidate horses for personalized edge: a single pet, or the roster's top 20 by cq.
   let candidateIds: number[] = [];
@@ -1295,8 +1323,14 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
   let racing = new Set<number>();
   if (personalized) {
     resting = await dailyExhausted(candidateIds);
-    const inOpen = new Set(open.flatMap((l) => l.entries.map((e) => e.petId)));
-    racing = new Set(candidateIds.filter((id) => inOpen.has(id) && !resting.has(id)));
+    // A candidate is racing if the fresh snapshot has it in an unresolved race that
+    // paddock-db does NOT mark resolved. racingByPet covers full-but-running races,
+    // not just forming lobbies, and the resolved cross-check releases a horse the
+    // moment its race resolves, so a horse never stays stuck as "racing".
+    racing = new Set(candidateIds.filter((id) => {
+      const rid = racingByPet[id];
+      return rid != null && !resolvedRaceIds.has(rid) && !resting.has(id);
+    }));
   }
   const unavailable = new Set<number>([...resting, ...racing]);
 
@@ -1391,6 +1425,7 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
     personalized,
     rankedBy: personalized ? "edge" : "open",
     fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null,
+    asOf,
     delayed,
     pollMs: POLL_MS,
     roster,

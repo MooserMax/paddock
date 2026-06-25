@@ -23,6 +23,9 @@ export async function GET(req: NextRequest, props: { params: Promise<{ address: 
 
   return guard(async () => {
     const summary = await getWalletSummary(input);
-    return ok(summary, { sMaxAge: 60, staleWhileRevalidate: 300 });
+    // Shorter edge cache so a just-resolved race's updated stats are not served stale
+    // for minutes. The client also polls and refetches on focus; this bounds the CDN
+    // contribution to staleness to ~90s while still fanning repeat viewers out.
+    return ok(summary, { sMaxAge: 30, staleWhileRevalidate: 60 });
   });
 }

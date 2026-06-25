@@ -76,6 +76,16 @@ interface RaceState {
 
 interface Snapshot {
   lobbies: OpenLobby[];
+  // Every pet currently in an UNRESOLVED race the snapshot has seen, mapped to that
+  // race id, regardless of whether the race is still forming or already full. This is
+  // the fresh "is this horse busy racing" signal: a horse stays here from the moment
+  // it joins until its race resolves (RACE_RESOLVED) or ages out. Carrying the race
+  // id lets the caller cross-check each entry against the resolved-state in paddock-db,
+  // so a stuck per-instance snapshot can never strand a horse as "racing" past the
+  // ingest cadence. Full-but-unresolved races are included on purpose (a horse in a
+  // locked, running race is busy too), which is why this is a superset of the forming
+  // lobby entrants.
+  racingByPet: Record<number, number>;
   fetchedAt: number;
   tip: number;
 }
@@ -190,6 +200,22 @@ function formingLobbies(): OpenLobby[] {
   return out;
 }
 
+// Every pet in an unresolved race the snapshot currently holds, mapped to that race
+// id. Forming AND full-but-unresolved races count: a horse is busy from join until
+// resolution. Resolved races are excluded (the horse is free again). This is the
+// fresh racing signal the roster uses, cross-checked against paddock-db for safety.
+function racingByPetFromMap(): Record<number, number> {
+  const out: Record<number, number> = {};
+  for (const r of races.values()) {
+    if (r.resolved) continue;
+    for (const e of r.entries) {
+      // If somehow seen in more than one open race, keep the newest race id.
+      if (out[e.petId] == null || r.raceId > out[e.petId]) out[e.petId] = r.raceId;
+    }
+  }
+  return out;
+}
+
 // entryFee and pool are not carried by the events, so for EV on the rare paid race
 // we read them once per race from the public API, cache them, and tolerate failure
 // (default free, EV null). This is strictly off the hot path: at most a few reads
@@ -237,7 +263,7 @@ async function doRefresh(): Promise<void> {
     const lobbies = formingLobbies();
     // Best-effort fee/pool enrichment for newly seen forming races (off hot path).
     await enrichFees(lobbies);
-    cache = { lobbies: formingLobbies(), fetchedAt: Date.now(), tip: tipNum };
+    cache = { lobbies: formingLobbies(), racingByPet: racingByPetFromMap(), fetchedAt: Date.now(), tip: tipNum };
     delayed = false;
     ttl = FRESH_MS;
   } catch {
@@ -258,7 +284,7 @@ async function doRefresh(): Promise<void> {
 // share one upstream read, so the RPC still sees roughly one eth_getLogs per FRESH
 // window, not one per request. A single eth_getLogs is fast, so awaiting per stale
 // read adds negligible latency and is the correct tradeoff for never freezing.
-export async function getOpenLobbies(): Promise<{ lobbies: OpenLobby[]; fetchedAt: number | null; delayed: boolean }> {
+export async function getOpenLobbies(): Promise<{ lobbies: OpenLobby[]; racingByPet: Record<number, number>; fetchedAt: number | null; delayed: boolean }> {
   const stale = !cache || Date.now() - cache.fetchedAt >= ttl;
   if (stale) {
     if (!inflight) inflight = doRefresh().finally(() => { inflight = null; });
@@ -272,7 +298,7 @@ export async function getOpenLobbies(): Promise<{ lobbies: OpenLobby[]; fetchedA
   // a single failure can never wedge the instance into permanent empty.
   const age = cache ? Date.now() - cache.fetchedAt : Infinity;
   if (age > STALE_CEILING_MS) {
-    return { lobbies: [], fetchedAt, delayed: true };
+    return { lobbies: [], racingByPet: {}, fetchedAt, delayed: true };
   }
-  return { lobbies: cache?.lobbies ?? [], fetchedAt, delayed };
+  return { lobbies: cache?.lobbies ?? [], racingByPet: cache?.racingByPet ?? {}, fetchedAt, delayed };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
 import type { WalletSummary, PetCardDTO, PetDossier, RaceHistoryItem } from "@/lib/api/types";
@@ -9,7 +9,7 @@ import Panel from "@/components/ui/Panel";
 import WalletSearch from "@/components/WalletSearch";
 import { ConnectBar } from "@/components/racefinder/EntryControls";
 import RaceTracker from "@/components/stable/RaceTracker";
-import { formatEth, formatInt, ordinal, ownerDisplay, timeAgo } from "@/lib/format";
+import { formatEth, formatInt, ordinal, ownerDisplay, timeAgo, asOfLabel } from "@/lib/format";
 
 // Logged-in stable home. With a wallet connected (AGW or injected) it loads that
 // address's stable automatically, no pasting. With no wallet it falls back to the
@@ -29,41 +29,49 @@ export default function StableHome({ initialAddress }: { initialAddress: string 
   const [perfs, setPerfs] = useState<Perf[]>([]);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  // Reload the stable. Re-run on mount, on a slow poll, and on tab focus, so a
+  // just-resolved race's updated stats appear within a bounded window instead of
+  // staying stale until a manual reload. aliveRef guards against setState after the
+  // wallet changed mid-flight.
+  const aliveRef = useRef(0);
+  const load = useCallback(async (showSpinner: boolean) => {
     if (!wallet) { setSummary(null); setPerfs([]); return; }
-    let alive = true;
-    setLoading(true);
-    (async () => {
-      try {
-        const res = await fetch(`/api/v1/wallet/${wallet}`, { cache: "no-store" });
-        const s = res.ok ? ((await res.json()) as WalletSummary) : null;
-        if (!alive) return;
-        setSummary(s);
-        // Recent performances: pull the top few horses' dossiers and merge their
-        // recent races into one timeline. Bounded to keep it polite.
-        const horses = [...(s?.aTeam ?? []), ...(s?.hiddenGems ?? [])]
-          .sort((a, b) => b.confirmedQuality - a.confirmedQuality)
-          .slice(0, 6);
-        const merged: Perf[] = [];
-        await Promise.all(horses.map(async (h) => {
-          try {
-            const pr = await fetch(`/api/v1/pet/${h.id}`, { cache: "no-store" });
-            if (!pr.ok) return;
-            const dossier = (await pr.json()) as PetDossier;
-            for (const rr of dossier.recentRaces ?? []) merged.push({ ...rr, petId: h.id, petName: h.name });
-          } catch { /* skip this horse */ }
-        }));
-        if (!alive) return;
-        merged.sort((a, b) => (b.resolvedAt ?? "").localeCompare(a.resolvedAt ?? ""));
-        setPerfs(merged.slice(0, 12));
-      } catch {
-        if (alive) setSummary(null);
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
+    const gen = ++aliveRef.current;
+    if (showSpinner) setLoading(true);
+    try {
+      const res = await fetch(`/api/v1/wallet/${wallet}`, { cache: "no-store" });
+      const s = res.ok ? ((await res.json()) as WalletSummary) : null;
+      if (gen !== aliveRef.current) return;
+      setSummary(s);
+      const horses = [...(s?.aTeam ?? []), ...(s?.hiddenGems ?? [])]
+        .sort((a, b) => b.confirmedQuality - a.confirmedQuality)
+        .slice(0, 6);
+      const merged: Perf[] = [];
+      await Promise.all(horses.map(async (h) => {
+        try {
+          const pr = await fetch(`/api/v1/pet/${h.id}`, { cache: "no-store" });
+          if (!pr.ok) return;
+          const dossier = (await pr.json()) as PetDossier;
+          for (const rr of dossier.recentRaces ?? []) merged.push({ ...rr, petId: h.id, petName: h.name });
+        } catch { /* skip this horse */ }
+      }));
+      if (gen !== aliveRef.current) return;
+      merged.sort((a, b) => (b.resolvedAt ?? "").localeCompare(a.resolvedAt ?? ""));
+      setPerfs(merged.slice(0, 12));
+    } catch {
+      if (gen === aliveRef.current) setSummary(null);
+    } finally {
+      if (gen === aliveRef.current) setLoading(false);
+    }
   }, [wallet]);
+
+  useEffect(() => {
+    load(true);
+    const poll = setInterval(() => load(false), 60_000);
+    const onFocus = () => load(false);
+    window.addEventListener("focus", onFocus);
+    return () => { aliveRef.current++; clearInterval(poll); window.removeEventListener("focus", onFocus); };
+  }, [load]);
 
   // No wallet at all: connect, or paste an address (the existing fallback).
   if (!wallet) {
@@ -112,6 +120,9 @@ export default function StableHome({ initialAddress }: { initialAddress: string 
               )}
               <Link href={`/wallet/${summary.address}`} className="type-micro uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>Full report</Link>
             </div>
+            {summary.asOf && (
+              <span className="type-micro normal-case text-ink-faint">Stable data as of {asOfLabel(summary.asOf)}, refreshes automatically</span>
+            )}
           </header>
 
           {/* Follow-your-entry tracker (Piece 3) */}

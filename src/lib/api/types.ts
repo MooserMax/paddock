@@ -180,6 +180,7 @@ export interface WalletSummary {
   revealQueue: RevealQueueItem[];
   trackAssignments: { distance: number; petId: number | null; name: string | null; fit: number }[];
   flags: string[];
+  asOf: string | null; // last ingest completion time, for an honest "as of HH:MM"
   meta: { source: string; refreshing: boolean };
 }
 
@@ -250,6 +251,7 @@ export interface RaceDetail {
   resolvedAt: string | null;
   entrants: RaceEntrantDTO[];
   verdict: VerdictDTO;
+  asOf: string | null; // last ingest completion time, for an honest "as of HH:MM"
   meta: { source: string; eloThreshold: number };
 }
 
@@ -382,7 +384,8 @@ export interface LobbyResponse {
   pet: number | null;
   personalized: boolean;
   rankedBy: "edge" | "open"; // edge (your pWin) when personalized, else by openSlots/recency
-  fetchedAt: string | null;
+  fetchedAt: string | null; // live chain snapshot time (forming-lobby field freshness)
+  asOf: string | null; // last ingest completion time (resolved-state freshness), for "as of HH:MM"
   delayed: boolean; // live upstream is throttled, snapshot may be stale
   pollMs: number; // suggested client poll interval
   // Daily race eligibility of the user's roster, two stable states like dagrid.
