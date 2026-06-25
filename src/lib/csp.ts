@@ -14,7 +14,7 @@
 // name and blocking behavior change). To roll back, set this to 'report-only' and
 // redeploy: one constant, one commit.
 type CspMode = "enforce" | "report-only";
-export const CSP_MODE = "report-only" as CspMode;
+export const CSP_MODE = "enforce" as CspMode;
 
 export const CSP_HEADER_NAME =
   CSP_MODE === "enforce" ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only";
@@ -23,15 +23,19 @@ export function buildCsp(nonce: string): string {
   return [
     "default-src 'self'",
     // No 'unsafe-inline' for scripts. Nonce + strict-dynamic: the nonced bootstrap
-    // loads the rest; unnonced inline scripts are blocked.
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
+    // loads the rest; unnonced inline scripts are blocked. 'wasm-unsafe-eval' is the
+    // one keyword the live connect+sign session surfaced (Privy/AGW compiles
+    // WebAssembly); it permits WASM only, NOT arbitrary inline or eval'd JS, so the
+    // script-injection protection stands. Never add 'unsafe-eval' or 'unsafe-inline'.
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'wasm-unsafe-eval'`,
     // Inline styles kept (low risk, pervasive); not the security target here.
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https://*.mypinata.cloud https://i.seadn.io https://*.seadn.io",
     "font-src 'self' data:",
     // The Abstract RPC plus the AGW/Privy auth origins the wallet flow contacts.
-    // Wildcards kept because Privy rotates subdomains; Step 1's live connect+sign
-    // session confirms whether anything beyond these is needed before enforcing.
+    // The full live connect+sign session reported ZERO connect-src violations, so
+    // these wildcards already cover every origin the flow touched; unchanged on
+    // enforce. Wildcards kept because Privy rotates subdomains.
     "connect-src 'self' https://api.mainnet.abs.xyz https://*.abs.xyz https://auth.privy.io https://*.privy.io wss://*.privy.io",
     "frame-src 'self' https://auth.privy.io https://*.privy.io https://*.abs.xyz",
     "frame-ancestors 'none'",
