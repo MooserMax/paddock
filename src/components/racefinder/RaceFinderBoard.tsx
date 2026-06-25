@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
-import type { LobbyResponse, LobbyRow, LobbyEdgeOption } from "@/lib/api/types";
+import type { LobbyResponse, LobbyRow, LobbyEdgeOption, PetEntryCheck } from "@/lib/api/types";
 import RarityBadge from "@/components/RarityBadge";
 import { formatEth, formatInt, asOfLabel } from "@/lib/format";
 import { ConnectBar, EntryButton } from "./EntryControls";
@@ -57,6 +57,19 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
       setError("Live data is delayed, retrying.");
     }
   }, []);
+
+  // Re-enter support: after a horse enters a race, the server's "racing" signal takes
+  // a cycle to catch up, so we optimistically drop a just-entered horse from the
+  // pickers right away (across all lobbies) and refresh the board. The timestamp lets
+  // the optimistic drop expire after the server has caught up, so a horse that becomes
+  // eligible again (its race resolved, still under the daily cap) reappears. This is
+  // what keeps the flow alive: enter one, it drops out, immediately pick another.
+  const [enteredAt, setEnteredAt] = useState<Map<number, number>>(new Map());
+  const handleEntered = useCallback((petId: number) => {
+    setEnteredAt((prev) => new Map(prev).set(petId, Date.now()));
+    load();
+  }, [load]);
+  const recentlyEntered = new Set([...enteredAt].filter(([, t]) => Date.now() - t < 45_000).map(([id]) => id));
 
   useEffect(() => {
     load();
@@ -161,7 +174,7 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
         </div>
       ) : (
         <div className="grid gap-3">
-          {lobbies.map((l) => <LobbyCard key={l.raceId} lobby={l} personalized={personalized} connectedAddress={connectedAddress} onEntered={load} />)}
+          {lobbies.map((l) => <LobbyCard key={l.raceId} lobby={l} personalized={personalized} connectedAddress={connectedAddress} recentlyEntered={recentlyEntered} onEntered={handleEntered} />)}
         </div>
       )}
 
@@ -172,22 +185,31 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
   );
 }
 
-function LobbyCard({ lobby: l, personalized, connectedAddress, onEntered }: { lobby: LobbyRow; personalized: boolean; connectedAddress: string | null; onEntered: () => void }) {
+function LobbyCard({ lobby: l, personalized, connectedAddress, recentlyEntered, onEntered }: { lobby: LobbyRow; personalized: boolean; connectedAddress: string | null; recentlyEntered: Set<number>; onEntered: (petId: number) => void }) {
   const fee = Number(l.entryFeeWei || "0");
   const evEth = l.edge?.evWei != null ? Number(l.edge.evWei) / 1e18 : null;
 
   // The user's top eligible horses for this lobby, best first. Default selection is
   // the model's top pick (options[0]), so doing nothing preserves the old behavior.
   // Selecting another horse only changes which petId enters; the entry flow is
-  // unchanged. Selection persists across the 4s refresh and resets only if the chosen
-  // horse drops out of the eligible set.
-  const options: LobbyEdgeOption[] = l.edge?.options ?? [];
+  // unchanged. A just-entered horse is filtered out immediately (recentlyEntered) so
+  // the picker advances to the next eligible horse without waiting for the server.
+  const options: LobbyEdgeOption[] = (l.edge?.options ?? []).filter((o) => !recentlyEntered.has(o.petId));
   const [selectedPetId, setSelectedPetId] = useState<number | null>(options[0]?.petId ?? null);
+  // A manually typed horse (validated for ownership + eligibility) becomes a selectable
+  // option just like a picked one; only its petId differs into the unchanged entry path.
+  const [manualOption, setManualOption] = useState<LobbyEdgeOption | null>(null);
+  const [manualMsg, setManualMsg] = useState<string | null>(null);
   useEffect(() => {
+    if (manualOption && selectedPetId === manualOption.petId) return; // keep a manual selection
     if (options.length && !options.some((o) => o.petId === selectedPetId)) setSelectedPetId(options[0].petId);
-  }, [options, selectedPetId]);
-  const selected = options.find((o) => o.petId === selectedPetId) ?? options[0] ?? null;
+  }, [options, selectedPetId, manualOption]);
+  const selected =
+    manualOption && manualOption.petId === selectedPetId
+      ? manualOption
+      : options.find((o) => o.petId === selectedPetId) ?? options[0] ?? null;
   const isTopPick = selected != null && l.edge != null && selected.petId === l.edge.petId;
+  const isManual = selected != null && manualOption != null && selected.petId === manualOption.petId;
 
   return (
     <div className="panel p-4 md:p-5">
@@ -239,21 +261,22 @@ function LobbyCard({ lobby: l, personalized, connectedAddress, onEntered }: { lo
       </p>
 
       {/* Entry: pick from your top eligible horses (best first), default the model's
-          top pick. Each option shows its win band so the tradeoff is honest, which
-          matters most for a paid race on a non-top horse. Signed by the user's own
-          wallet; only the selected petId changes, the entry flow is unchanged. */}
-      {connectedAddress && l.edge && selected && (
+          top pick, OR type a specific horse ID to override. Each option shows its win
+          band so the tradeoff is honest, which matters most for a paid race on a
+          non-top horse. Signed by the user's own wallet; only the selected petId
+          changes, the entry flow (value, simulation, signing) is unchanged. */}
+      {connectedAddress && (l.edge || manualOption) && (
         <div className="mt-3">
           {options.length > 1 && (
             <div className="mb-2.5">
               <p className="type-micro mb-1.5 uppercase tracking-wider text-ink-faint">Choose your horse</p>
               <div className="flex flex-wrap gap-1.5">
                 {options.map((o, i) => {
-                  const active = o.petId === selected.petId;
+                  const active = !isManual && o.petId === selected?.petId;
                   return (
                     <button
                       key={o.petId}
-                      onClick={() => setSelectedPetId(o.petId)}
+                      onClick={() => { setSelectedPetId(o.petId); setManualMsg(null); }}
                       aria-pressed={active}
                       className="rounded-md border px-2.5 py-1.5 text-left transition-paddock"
                       style={{ borderColor: active ? "var(--glow)" : "var(--line-strong)", background: active ? "color-mix(in srgb, var(--glow) 12%, transparent)" : "transparent" }}
@@ -265,20 +288,84 @@ function LobbyCard({ lobby: l, personalized, connectedAddress, onEntered }: { lo
                     </button>
                   );
                 })}
+                {isManual && selected && (
+                  <span className="rounded-md border px-2.5 py-1.5" style={{ borderColor: "var(--glow)", background: "color-mix(in srgb, var(--glow) 12%, transparent)" }}>
+                    <span className="type-data block" style={{ color: "var(--glow)" }}>{selected.petName ?? `#${selected.petId}`} (manual)</span>
+                    <span className="type-micro block normal-case text-ink-faint">{selected.band}</span>
+                  </span>
+                )}
               </div>
             </div>
           )}
-          <div className="flex flex-wrap items-center gap-2">
-            <EntryButton lobby={l} pick={selected} walletAddress={connectedAddress} onEntered={onEntered} />
-            <span className="type-micro normal-case text-ink-faint">
-              {isTopPick
-                ? `Paddock recommends ${selected.petName ?? `#${selected.petId}`} here, ${selected.band.toLowerCase()} in this field.`
-                : `Entering ${selected.petName ?? `#${selected.petId}`}, ${selected.band.toLowerCase()}${fee > 0 ? " in a paid race" : ""}. Paddock's top pick is ${l.edge.petName ?? `#${l.edge.petId}`}.`}
-              {fee > 0 && selected.evWei != null ? ` EV est ${formatEth(Number(selected.evWei) / 1e18, 4)}.` : ""}
-            </span>
-          </div>
+
+          {/* Manual horse-ID override, gated by ownership + eligibility before it can
+              be selected; the simulation gate is still the final check at entry. */}
+          <ManualHorseInput
+            wallet={connectedAddress}
+            raceId={l.raceId}
+            onValid={(opt) => { setManualOption(opt); setSelectedPetId(opt.petId); setManualMsg(null); }}
+            onInvalid={(msg) => { setManualMsg(msg); }}
+          />
+          {manualMsg && <p className="type-micro mt-1.5 normal-case" style={{ color: "var(--gold)" }}>{manualMsg}</p>}
+
+          {selected && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <EntryButton lobby={l} pick={selected} walletAddress={connectedAddress} onEntered={onEntered} />
+              <span className="type-micro normal-case text-ink-faint">
+                {isManual
+                  ? `Entering ${selected.petName ?? `#${selected.petId}`}, ${selected.band.toLowerCase()}${fee > 0 ? " in a paid race" : ""} (your manual pick).`
+                  : isTopPick
+                    ? `Paddock recommends ${selected.petName ?? `#${selected.petId}`} here, ${selected.band.toLowerCase()} in this field.`
+                    : `Entering ${selected.petName ?? `#${selected.petId}`}, ${selected.band.toLowerCase()}${fee > 0 ? " in a paid race" : ""}.${l.edge ? ` Paddock's top pick is ${l.edge.petName ?? `#${l.edge.petId}`}.` : ""}`}
+                {fee > 0 && selected.evWei != null ? ` EV est ${formatEth(Number(selected.evWei) / 1e18, 4)}.` : ""}
+              </span>
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Manual horse-ID override. Validates ownership + eligibility (and the horse's band in
+// this race) via /api/v1/pet-eligibility before letting it be selected. The entry
+// flow's own pre-sign simulation remains the final guard.
+function ManualHorseInput({ wallet, raceId, onValid, onInvalid }: { wallet: string; raceId: number; onValid: (opt: LobbyEdgeOption) => void; onInvalid: (msg: string) => void }) {
+  const [id, setId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const go = useCallback(async () => {
+    const petId = Number(id);
+    if (!Number.isInteger(petId) || petId <= 0) { onInvalid("Enter a numeric horse ID."); return; }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/v1/pet-eligibility?wallet=${wallet}&pet=${petId}&race=${raceId}`, { cache: "no-store" });
+      const c = (await res.json()) as PetEntryCheck;
+      if (!c.owned) { onInvalid(c.reason ?? `You do not own #${petId}.`); return; }
+      if (!c.eligible) { onInvalid(c.reason ?? `#${petId} cannot enter this race right now.`); return; }
+      onValid({ petId: c.petId, petName: c.petName, pWin: c.pWin ?? 0, band: c.band ?? "Unscored", bandRange: c.bandRange ?? "", evWei: c.evWei });
+      setId("");
+    } catch {
+      onInvalid("Could not validate that horse, try again.");
+    } finally {
+      setBusy(false);
+    }
+  }, [id, wallet, raceId, onValid, onInvalid]);
+  return (
+    <div className="flex items-center gap-2">
+      <span className="type-micro uppercase tracking-wider text-ink-faint">or horse ID</span>
+      <input
+        value={id}
+        onChange={(e) => setId(e.target.value.replace(/[^\d]/g, ""))}
+        onKeyDown={(e) => { if (e.key === "Enter") go(); }}
+        inputMode="numeric"
+        placeholder="e.g. 4967"
+        aria-label="Enter a specific horse ID"
+        className="type-data w-24 rounded-md border bg-transparent px-2 py-1.5 text-ink outline-none focus-visible:border-glow"
+        style={{ borderColor: "var(--line-strong)" }}
+      />
+      <button onClick={go} disabled={busy || !id} className="type-micro uppercase tracking-wider rounded-md border px-3 py-1.5 text-ink transition-paddock hover:border-glow disabled:opacity-40" style={{ borderColor: "var(--line-strong)" }}>
+        {busy ? "checking" : "use"}
+      </button>
     </div>
   );
 }

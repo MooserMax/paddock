@@ -1214,7 +1214,7 @@ export async function getRecords(trackParam: number | null, mode: RecordMode, wi
 }
 
 // ---- Race Finder, live lobbies + your edge (read-only) ----------------------
-import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge, RaceTrackingDTO, RaceTrackEntrant, DevelopResponse, DevelopCandidate, DevelopRace } from "./types";
+import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge, RaceTrackingDTO, RaceTrackEntrant, DevelopResponse, DevelopCandidate, DevelopRace, PetEntryCheck } from "./types";
 import { getOpenLobbies, POLL_MS, type OpenLobby } from "../lobbies";
 import { fetchRace } from "../gigaverse";
 import { petRaceStatus } from "../raceLimit";
@@ -1536,6 +1536,65 @@ export async function getDevelop(walletParam: string | null): Promise<DevelopRes
   candidates.sort((a, b) => a.revealPct - b.revealPct || a.racesRun - b.racesRun || a.petId - b.petId);
 
   return { wallet, candidates, ...base };
+}
+
+// Validate a manually typed horse ID for entry: ownership + eligibility + (for a
+// given race) the horse's band. Same gates a picked horse passes; the client uses
+// this to block a bad manual override before the entry flow, and the entry flow's
+// own pre-sign simulation remains the final guard.
+export async function getPetEntryCheck(walletParam: string, petId: number, raceId: number | null): Promise<PetEntryCheck> {
+  const wallet = walletParam.toLowerCase();
+  const empty = { petId, petName: null as string | null, owned: false, status: "unknown" as PetEntryCheck["status"], alreadyEntered: false, eligible: false, reason: null as string | null, pWin: null as number | null, band: null as string | null, bandRange: null as string | null, evWei: null as string | null };
+
+  const { data: pet } = await db().from("pets").select("id, name, owner_address").eq("id", petId).maybeSingle();
+  const petName = (pet?.name as string) ?? null;
+  const owned = !!pet && ((pet.owner_address as string) ?? "").toLowerCase() === wallet;
+  if (!owned) return { ...empty, petName, reason: `You do not own #${petId}.` };
+
+  const { lobbies: open, racingByPet } = await getOpenLobbies();
+  const snapshotRaceIds = [...new Set([...open.map((l) => l.raceId), ...Object.values(racingByPet)])];
+  let resolvedRaceIds = new Set<number>();
+  if (snapshotRaceIds.length) {
+    const { data } = await db().from("races").select("race_id").in("race_id", snapshotRaceIds).eq("resolved", true);
+    resolvedRaceIds = new Set((data ?? []).map((r) => r.race_id as number));
+  }
+  const sMap = await petRaceStatus([petId], wallet);
+  const s = sMap.get(petId);
+  const rid = racingByPet[petId];
+  const inRace = (rid != null && !resolvedRaceIds.has(rid)) || s?.locked === true;
+  const status: PetEntryCheck["status"] = inRace ? "racing" : s?.canRace === false ? "resting" : "available";
+  if (status === "racing") return { ...empty, petName, owned: true, status, reason: `#${petId} is racing right now.` };
+  if (status === "resting") return { ...empty, petName, owned: true, status, reason: `#${petId} has used its daily race limit.` };
+
+  // available. If a race is given, validate it and compute the horse's band there.
+  let alreadyEntered = false, reason: string | null = null;
+  let pWin: number | null = null, band: string | null = null, bandRange: string | null = null, evWei: string | null = null;
+  if (raceId != null) {
+    const lobby = open.find((l) => l.raceId === raceId);
+    if (!lobby || resolvedRaceIds.has(raceId)) reason = `Race #${raceId} is not open.`;
+    else if (lobby.openSlots <= 0) reason = `Race #${raceId} is full.`;
+    else if (lobby.entries.some((e) => e.petId === petId)) { alreadyEntered = true; reason = `#${petId} is already in race #${raceId}.`; }
+    else {
+      const ids = [...lobby.entries.map((e) => e.petId), petId];
+      const strength = await strengthByIds(ids);
+      const fieldInputs = lobby.entries.map((e) => { const st = strength.get(e.petId); return st ? oddsInput(e.petId, st, lobby.trackLength) : null; }).filter((x): x is NonNullable<typeof x> => x != null);
+      const sp = strength.get(petId);
+      if (sp) {
+        const { results } = computeOdds([...fieldInputs, oddsInput(petId, sp, lobby.trackLength)]);
+        const p = results.find((r) => r.petId === petId)?.winProbability ?? 0;
+        const fee = Number(lobby.entryFeeWei || "0");
+        const pool = Number(lobby.poolWei ?? "0");
+        const firstBps = lobby.payoutBps[0] ?? 0;
+        const firstPrize = (pool + fee) * (firstBps / 10000);
+        const pForEv = Math.min(p, PWIN_CEILING);
+        evWei = fee > 0 || pool > 0 ? String(Math.round(pForEv * firstPrize - fee)) : null;
+        const b = pWinBand(p);
+        pWin = p; band = b.label; bandRange = b.range;
+      }
+    }
+  }
+  const eligible = status === "available" && !alreadyEntered && reason === null;
+  return { petId, petName, owned: true, status, alreadyEntered, eligible, reason, pWin, band, bandRange, evWei };
 }
 
 // ---- Follow your entry, live race tracking (read-only) ----------------------

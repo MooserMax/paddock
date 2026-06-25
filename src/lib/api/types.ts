@@ -425,6 +425,22 @@ export interface DevelopResponse {
   meta: { source: string; note: string };
 }
 
+// Validation for a manually typed horse ID, gating a manual override the same way a
+// picked horse is gated: ownership + eligibility + (for a given race) its band.
+export interface PetEntryCheck {
+  petId: number;
+  petName: string | null;
+  owned: boolean; // the connected wallet owns this Gigling
+  status: "available" | "racing" | "resting" | "unknown";
+  alreadyEntered: boolean; // already an entrant in the given race
+  eligible: boolean; // owned && available && race open && not already entered
+  reason: string | null; // why it cannot be entered, if so
+  pWin: number | null; // the horse's win probability in the given race's field
+  band: string | null;
+  bandRange: string | null;
+  evWei: string | null;
+}
+
 export interface LobbyResponse {
   lobbies: LobbyRow[];
   wallet: string | null;

@@ -111,6 +111,15 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
   const available = candidates.filter((c) => c.status === "available");
   const byId = new Map(candidates.map((c) => [c.petId, c]));
 
+  // LIVE assignment, shown as the user selects (not hidden until review). This is the
+  // EXACT placement the batch will use: selected horses are assigned best-development-
+  // need first (candidate order) into open free slots; overflow has no slot and is
+  // excluded. assignToSlots is deterministic, so what is shown is what is submitted.
+  const selectedOrder = available.filter((c) => selected.has(c.petId)).map((c) => c.petId);
+  const liveAssign = assignToSlots(selectedOrder, freeRaces);
+  const raceForPet = new Map(liveAssign.placed.map((p) => [p.petId, p.raceId]));
+  const unplacedSet = new Set(liveAssign.unplaced);
+
   function toggle(petId: number) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -119,6 +128,20 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
       return next;
     });
   }
+
+  // Manual horse-ID add: validate ownership + eligibility against the wallet's own
+  // candidate set (which is exactly its hatched horses) before adding to the batch.
+  // Returns an error message or null. The per-call simulation in review() is the final
+  // guard, so a horse that slips through still cannot enter a doomed batch.
+  const addById = useCallback((petId: number): string | null => {
+    const c = candidates.find((x) => x.petId === petId);
+    if (!c) return `You do not own #${petId}, or it is not race-ready.`;
+    if (c.status !== "available") return `#${petId} is ${c.status === "racing" ? "racing now" : "resting (daily limit)"}.`;
+    if (selected.has(petId)) return `#${petId} is already selected.`;
+    if (selected.size >= DEVELOP_MAX_BATCH) return `You can select at most ${DEVELOP_MAX_BATCH}.`;
+    setSelected((prev) => new Set(prev).add(petId));
+    return null;
+  }, [candidates, selected]);
 
   // Assign selected -> free slots, then SIMULATE every call at value 0. Only calls
   // that simulate green enter the batch; reverting ones are dropped and surfaced, so
@@ -248,16 +271,27 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
           ) : (
             <div className="grid gap-2">
               {candidates.map((c) => (
-                <DevelopRow key={c.petId} c={c} selected={selected.has(c.petId)} disabled={c.status !== "available" || (!selected.has(c.petId) && selected.size >= DEVELOP_MAX_BATCH)} onToggle={() => toggle(c.petId)} />
+                <DevelopRow
+                  key={c.petId}
+                  c={c}
+                  selected={selected.has(c.petId)}
+                  disabled={c.status !== "available" || (!selected.has(c.petId) && selected.size >= DEVELOP_MAX_BATCH)}
+                  assignedRace={selected.has(c.petId) ? raceForPet.get(c.petId) ?? null : undefined}
+                  noSlot={selected.has(c.petId) && unplacedSet.has(c.petId)}
+                  onToggle={() => toggle(c.petId)}
+                />
               ))}
             </div>
           )}
 
+          {/* Manual horse-ID add, alongside the ranked picker. */}
+          {candidates.length > 0 && <DevelopManualAdd onAdd={addById} />}
+
           {/* Action bar */}
           <div className="sticky bottom-3 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border p-3" style={{ borderColor: "var(--line-strong)", background: "var(--paper-raised)" }}>
             <span className="type-data text-ink-soft">
-              {selected.size} selected{selected.size >= DEVELOP_MAX_BATCH ? ` (max ${DEVELOP_MAX_BATCH})` : ""}
-              {data && data.openFreeSlots < selected.size ? `, only ${data.openFreeSlots} free slots open` : ""}
+              {selected.size} selected{selected.size >= DEVELOP_MAX_BATCH ? ` (max ${DEVELOP_MAX_BATCH})` : ""}, {data?.openFreeSlots ?? 0} free {(data?.openFreeSlots ?? 0) === 1 ? "slot" : "slots"} open
+              {unplacedSet.size > 0 ? <span style={{ color: "var(--gold)" }}>, {unplacedSet.size} cannot be placed</span> : ""}
             </span>
             <button
               onClick={review}
@@ -307,7 +341,38 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
   );
 }
 
-function DevelopRow({ c, selected, disabled, onToggle }: { c: DevelopCandidate; selected: boolean; disabled: boolean; onToggle: () => void }) {
+function DevelopManualAdd({ onAdd }: { onAdd: (petId: number) => string | null }) {
+  const [id, setId] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const go = () => {
+    const petId = Number(id);
+    if (!Number.isInteger(petId) || petId <= 0) { setMsg("Enter a numeric horse ID."); return; }
+    const err = onAdd(petId);
+    setMsg(err);
+    if (!err) setId("");
+  };
+  return (
+    <div className="mt-3">
+      <div className="flex items-center gap-2">
+        <span className="type-micro uppercase tracking-wider text-ink-faint">add by ID</span>
+        <input
+          value={id}
+          onChange={(e) => setId(e.target.value.replace(/[^\d]/g, ""))}
+          onKeyDown={(e) => { if (e.key === "Enter") go(); }}
+          inputMode="numeric"
+          placeholder="e.g. 4967"
+          aria-label="Add a specific horse by ID"
+          className="type-data w-24 rounded-md border bg-transparent px-2 py-1.5 text-ink outline-none focus-visible:border-glow"
+          style={{ borderColor: "var(--line-strong)" }}
+        />
+        <button onClick={go} disabled={!id} className="type-micro uppercase tracking-wider rounded-md border px-3 py-1.5 text-ink transition-paddock hover:border-glow disabled:opacity-40" style={{ borderColor: "var(--line-strong)" }}>add</button>
+      </div>
+      {msg && <p className="type-micro mt-1.5 normal-case" style={{ color: "var(--gold)" }}>{msg}</p>}
+    </div>
+  );
+}
+
+function DevelopRow({ c, selected, disabled, assignedRace, noSlot, onToggle }: { c: DevelopCandidate; selected: boolean; disabled: boolean; assignedRace?: number | null; noSlot?: boolean; onToggle: () => void }) {
   const statusLabel = c.status === "available" ? null : c.status === "racing" ? "racing now" : "resting (daily limit)";
   return (
     <button
@@ -328,9 +393,17 @@ function DevelopRow({ c, selected, disabled, onToggle }: { c: DevelopCandidate; 
           </p>
         </div>
       </div>
-      <span className="type-micro uppercase tracking-wider" style={{ color: statusLabel ? "var(--ink-faint)" : "var(--green)" }}>
-        {statusLabel ?? "ready"}
-      </span>
+      <div className="flex items-center gap-2.5">
+        {/* The race this horse will enter, shown inline as soon as it is selected, so
+            the assignment is never a black box until review. */}
+        {selected && noSlot && <span className="type-micro uppercase tracking-wider" style={{ color: "var(--gold)" }}>no open slot</span>}
+        {selected && !noSlot && assignedRace != null && (
+          <span className="type-micro uppercase tracking-wider" style={{ color: "var(--glow)" }}>→ race #{assignedRace}</span>
+        )}
+        <span className="type-micro uppercase tracking-wider" style={{ color: statusLabel ? "var(--ink-faint)" : "var(--green)" }}>
+          {statusLabel ?? "ready"}
+        </span>
+      </div>
     </button>
   );
 }
