@@ -1385,24 +1385,33 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
       // Never recommend a horse the user cannot enter: resting (daily limit) or
       // racing (busy in another forming race), both stable signals.
       const eligible = candidateIds.filter((id) => strength.has(id) && !l.entries.some((e) => e.petId === id) && !unavailable.has(id));
-      let best: { petId: number; pWin: number } | null = null;
-      for (const id of eligible) {
-        const s = strength.get(id)!;
-        const { results } = computeOdds([...fieldInputs, oddsInput(id, s, l.trackLength)]);
-        const p = results.find((r) => r.petId === id)?.winProbability ?? 0;
-        if (!best || p > best.pWin) best = { petId: id, pWin: p };
-      }
-      if (best) {
+      // Rank ALL eligible horses by the model's win probability (not just the best).
+      // Same pWin computation as before; we simply stop discarding the runners-up.
+      const ranked = eligible
+        .map((id) => {
+          const s = strength.get(id)!;
+          const { results } = computeOdds([...fieldInputs, oddsInput(id, s, l.trackLength)]);
+          return { petId: id, pWin: results.find((r) => r.petId === id)?.winProbability ?? 0 };
+        })
+        .sort((a, b) => b.pWin - a.pWin);
+      if (ranked.length) {
         const fee = Number(l.entryFeeWei || "0");
         const pool = Number(l.poolWei ?? "0");
         const firstBps = l.payoutBps[0] ?? 0;
         const firstPrize = (pool + fee) * (firstBps / 10000);
-        // EV uses the CAPPED probability so it never inherits the uncalibrated
-        // overconfident tail (a raw 0.9997 would fabricate a precise EV).
-        const pForEv = Math.min(best.pWin, PWIN_CEILING);
-        const evWei = fee > 0 || pool > 0 ? String(Math.round(pForEv * firstPrize - fee)) : null;
-        const b = pWinBand(best.pWin);
-        edge = { petId: best.petId, petName: strength.get(best.petId)?.name ?? null, pWin: best.pWin, band: b.label, bandRange: b.range, calibrated: false, evWei, eligibleCount: eligible.length };
+        // One option per horse, reusing the SAME capped-EV and band logic the single
+        // pick used (EV uses the CAPPED probability so it never inherits the
+        // uncalibrated overconfident tail). options[0] is the model's top pick and its
+        // fields mirror the single edge exactly, so existing behavior is preserved.
+        const toOption = ({ petId, pWin }: { petId: number; pWin: number }) => {
+          const pForEv = Math.min(pWin, PWIN_CEILING);
+          const evWei = fee > 0 || pool > 0 ? String(Math.round(pForEv * firstPrize - fee)) : null;
+          const b = pWinBand(pWin);
+          return { petId, petName: strength.get(petId)?.name ?? null, pWin, band: b.label, bandRange: b.range, evWei };
+        };
+        const options = ranked.slice(0, 5).map(toOption);
+        const top = options[0];
+        edge = { petId: top.petId, petName: top.petName, pWin: top.pWin, band: top.band, bandRange: top.bandRange, calibrated: false, evWei: top.evWei, eligibleCount: eligible.length, options };
       }
     }
 

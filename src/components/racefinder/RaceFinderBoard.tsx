@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
-import type { LobbyResponse, LobbyRow } from "@/lib/api/types";
+import type { LobbyResponse, LobbyRow, LobbyEdgeOption } from "@/lib/api/types";
 import RarityBadge from "@/components/RarityBadge";
 import { formatEth, formatInt, asOfLabel } from "@/lib/format";
 import { ConnectBar, EntryButton } from "./EntryControls";
@@ -175,6 +175,20 @@ export default function RaceFinderBoard({ initialWallet }: { initialWallet: stri
 function LobbyCard({ lobby: l, personalized, connectedAddress, onEntered }: { lobby: LobbyRow; personalized: boolean; connectedAddress: string | null; onEntered: () => void }) {
   const fee = Number(l.entryFeeWei || "0");
   const evEth = l.edge?.evWei != null ? Number(l.edge.evWei) / 1e18 : null;
+
+  // The user's top eligible horses for this lobby, best first. Default selection is
+  // the model's top pick (options[0]), so doing nothing preserves the old behavior.
+  // Selecting another horse only changes which petId enters; the entry flow is
+  // unchanged. Selection persists across the 4s refresh and resets only if the chosen
+  // horse drops out of the eligible set.
+  const options: LobbyEdgeOption[] = l.edge?.options ?? [];
+  const [selectedPetId, setSelectedPetId] = useState<number | null>(options[0]?.petId ?? null);
+  useEffect(() => {
+    if (options.length && !options.some((o) => o.petId === selectedPetId)) setSelectedPetId(options[0].petId);
+  }, [options, selectedPetId]);
+  const selected = options.find((o) => o.petId === selectedPetId) ?? options[0] ?? null;
+  const isTopPick = selected != null && l.edge != null && selected.petId === l.edge.petId;
+
   return (
     <div className="panel p-4 md:p-5">
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -224,12 +238,45 @@ function LobbyCard({ lobby: l, personalized, connectedAddress, onEntered }: { lo
         {personalized && l.edge ? " This race is forming, so your odds shift as horses enter." : ""}
       </p>
 
-      {/* One-click entry: the algo's pick for this race, signed by the user's own
-          wallet. Only when connected and this lobby has a recommended horse. */}
-      {connectedAddress && l.edge && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <EntryButton lobby={l} walletAddress={connectedAddress} onEntered={onEntered} />
-          <span className="type-micro normal-case text-ink-faint">Paddock recommends {l.edge.petName ?? `#${l.edge.petId}`} here, {l.edge.band.toLowerCase()} in this field.</span>
+      {/* Entry: pick from your top eligible horses (best first), default the model's
+          top pick. Each option shows its win band so the tradeoff is honest, which
+          matters most for a paid race on a non-top horse. Signed by the user's own
+          wallet; only the selected petId changes, the entry flow is unchanged. */}
+      {connectedAddress && l.edge && selected && (
+        <div className="mt-3">
+          {options.length > 1 && (
+            <div className="mb-2.5">
+              <p className="type-micro mb-1.5 uppercase tracking-wider text-ink-faint">Choose your horse</p>
+              <div className="flex flex-wrap gap-1.5">
+                {options.map((o, i) => {
+                  const active = o.petId === selected.petId;
+                  return (
+                    <button
+                      key={o.petId}
+                      onClick={() => setSelectedPetId(o.petId)}
+                      aria-pressed={active}
+                      className="rounded-md border px-2.5 py-1.5 text-left transition-paddock"
+                      style={{ borderColor: active ? "var(--glow)" : "var(--line-strong)", background: active ? "color-mix(in srgb, var(--glow) 12%, transparent)" : "transparent" }}
+                    >
+                      <span className="type-data block" style={{ color: active ? "var(--glow)" : "var(--ink-soft)" }}>
+                        {o.petName ?? `#${o.petId}`}{i === 0 ? " ★" : ""}
+                      </span>
+                      <span className="type-micro block normal-case text-ink-faint">{o.band}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <EntryButton lobby={l} pick={selected} walletAddress={connectedAddress} onEntered={onEntered} />
+            <span className="type-micro normal-case text-ink-faint">
+              {isTopPick
+                ? `Paddock recommends ${selected.petName ?? `#${selected.petId}`} here, ${selected.band.toLowerCase()} in this field.`
+                : `Entering ${selected.petName ?? `#${selected.petId}`}, ${selected.band.toLowerCase()}${fee > 0 ? " in a paid race" : ""}. Paddock's top pick is ${l.edge.petName ?? `#${l.edge.petId}`}.`}
+              {fee > 0 && selected.evWei != null ? ` EV est ${formatEth(Number(selected.evWei) / 1e18, 4)}.` : ""}
+            </span>
+          </div>
         </div>
       )}
     </div>

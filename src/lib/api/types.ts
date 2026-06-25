@@ -348,6 +348,17 @@ export interface LobbyEntrant {
   known: boolean; // false if we have no strength data for this horse yet
 }
 
+// One selectable horse for a lobby, with its win band. Same band/EV data as the
+// single pick, just per horse, so the user can choose a runner-up knowingly.
+export interface LobbyEdgeOption {
+  petId: number;
+  petName: string | null;
+  pWin: number; // raw model win probability; uncalibrated, do not render as a precise percent
+  band: string;
+  bandRange: string;
+  evWei: string | null; // capped-EV estimate in wei, null for free races
+}
+
 export interface LobbyEdge {
   petId: number;
   petName: string | null;
@@ -357,6 +368,9 @@ export interface LobbyEdge {
   calibrated: boolean; // always false here: the live model's ELO/fit signals are not validated at these odds
   evWei: string | null; // estimated value in wei from the capped pWin, null for free races; an estimate, not a precise figure
   eligibleCount: number; // how many of your horses could enter this lobby
+  // The user's top eligible horses for this lobby, best first (cap 5). options[0]
+  // equals the single-pick fields above, so anything reading edge.petId is unchanged.
+  options: LobbyEdgeOption[];
 }
 
 export interface LobbyRow {

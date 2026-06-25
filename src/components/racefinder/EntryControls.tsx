@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useAccount, useConnect, useDisconnect, usePublicClient, useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { useLoginWithAbstract } from "@abstract-foundation/agw-react";
-import type { LobbyRow, LobbyResponse } from "@/lib/api/types";
+import type { LobbyRow, LobbyResponse, LobbyEdgeOption } from "@/lib/api/types";
 import { shortAddress, formatEth } from "@/lib/format";
 import { setWalletFlag } from "@/lib/walletFlag";
 import { buildJoinTx, assertKnownGoodJoinTx, resolveEntryValueWei, isFreeEntry, PAID_ENTRY_ENABLED, PETRACING_CONTRACT, JOIN_RACE_SELECTOR, type EntryFeeTier } from "@/lib/entry/joinRace";
@@ -71,8 +71,12 @@ function ethFromWei(wei: bigint): string {
 // The confirm-before-sign modal: shows exactly what will be signed, re-validates and
 // SIMULATES immediately before the wallet prompt, and only prompts if the simulation
 // succeeds. Honest banded odds, never a guaranteed win.
-export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby: LobbyRow; walletAddress: string; onClose: () => void; onEntered: () => void }) {
-  const edge = lobby.edge!;
+// pick is the horse the user selected for this lobby (the model's top pick by
+// default). It drives BOTH the display and which petId is entered. Everything about
+// how the entry value is computed, simulated, and signed is unchanged; only the petId
+// differs from the old single-pick behavior.
+export function EntryModal({ lobby, pick, walletAddress, onClose, onEntered }: { lobby: LobbyRow; pick: LobbyEdgeOption; walletAddress: string; onClose: () => void; onEntered: () => void }) {
+  const edge = pick;
   const publicClient = usePublicClient();
   const { sendTransactionAsync } = useSendTransaction();
   const [phase, setPhase] = useState<Phase>("review");
@@ -126,7 +130,7 @@ export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby
       const data = res.ok ? ((await res.json()) as LobbyResponse) : null;
       const fresh = data?.lobbies.find((l) => l.raceId === lobby.raceId);
       if (!fresh || fresh.openSlots <= 0) { setReason("This race just filled or closed. Pick another lobby."); setPhase("blocked"); return; }
-      if (!fresh.edge || fresh.edge.petId !== edge.petId) { setReason("Your recommended horse changed for this field. Reopen to see the new pick."); setPhase("blocked"); return; }
+      if (!fresh.edge || !fresh.edge.options.some((o) => o.petId === edge.petId)) { setReason("Your selected horse is no longer eligible for this field. Reopen to pick again."); setPhase("blocked"); return; }
       if (fresh.entrants.some((e) => e.petId === edge.petId)) { setReason("This horse is already entered in this race."); setPhase("blocked"); return; }
 
       // (b) Compute the EXACT value for the tier being attempted from the LIVE bps,
@@ -282,7 +286,7 @@ function Row({ k, v, accent }: { k: string; v: string; accent?: boolean }) {
 
 // Per-lobby entry trigger. Shown only for a free race where the connected wallet has
 // an eligible recommended horse. Paid races show a gated note instead.
-export function EntryButton({ lobby, walletAddress, onEntered }: { lobby: LobbyRow; walletAddress: string; onEntered: () => void }) {
+export function EntryButton({ lobby, pick, walletAddress, onEntered }: { lobby: LobbyRow; pick: LobbyEdgeOption; walletAddress: string; onEntered: () => void }) {
   const [open, setOpen] = useState(false);
   if (!lobby.edge) return null;
   // Paid entry is fully built but gated behind PAID_ENTRY_ENABLED. While the flag is
@@ -295,9 +299,9 @@ export function EntryButton({ lobby, walletAddress, onEntered }: { lobby: LobbyR
   return (
     <>
       <button onClick={() => setOpen(true)} className="type-data rounded-md px-4 py-2" style={{ background: "var(--action)", color: "#14110f" }}>
-        Enter with {lobby.edge.petName ?? `#${lobby.edge.petId}`}
+        Enter with {pick.petName ?? `#${pick.petId}`}
       </button>
-      {open && <EntryModal lobby={lobby} walletAddress={walletAddress} onClose={() => setOpen(false)} onEntered={() => { setOpen(false); onEntered(); }} />}
+      {open && <EntryModal lobby={lobby} pick={pick} walletAddress={walletAddress} onClose={() => setOpen(false)} onEntered={() => { setOpen(false); onEntered(); }} />}
     </>
   );
 }
