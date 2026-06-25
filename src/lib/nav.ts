@@ -17,6 +17,7 @@ export const NAV_ROUTES: NavRoute[] = [
   { href: "/wallet", label: "Wallet", ready: true },
   { href: "/races", label: "Races", ready: true },
   { href: "/race-finder", label: "Race Finder", ready: true },
+  { href: "/develop", label: "Develop", ready: true },
   { href: "/scanner", label: "Scanner", ready: true },
   { href: "/leaderboards", label: "Leaderboards", ready: true },
   { href: "/records", label: "Records", ready: true },

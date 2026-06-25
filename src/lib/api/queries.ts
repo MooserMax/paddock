@@ -1214,7 +1214,7 @@ export async function getRecords(trackParam: number | null, mode: RecordMode, wi
 }
 
 // ---- Race Finder, live lobbies + your edge (read-only) ----------------------
-import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge, RaceTrackingDTO, RaceTrackEntrant } from "./types";
+import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge, RaceTrackingDTO, RaceTrackEntrant, DevelopResponse, DevelopCandidate, DevelopRace } from "./types";
 import { getOpenLobbies, POLL_MS, type OpenLobby } from "../lobbies";
 import { fetchRace } from "../gigaverse";
 import { petRaceStatus } from "../raceLimit";
@@ -1443,6 +1443,90 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
     roster,
     meta: { source: SOURCE, note: LOBBY_NOTE },
   };
+}
+
+// ---- Develop Mode: bulk reveal-farming into free races ----------------------
+const DEVELOP_NOTE =
+  "Develop Mode ranks your horses by how much they have left to reveal, not by win edge. Race your least-revealed horses into open free races to farm stat reveals in bulk, one approval, zero ETH.";
+
+export async function getDevelop(walletParam: string | null): Promise<DevelopResponse> {
+  const wallet = walletParam?.toLowerCase() ?? null;
+  const { lobbies: openRaw, racingByPet, fetchedAt, delayed } = await getOpenLobbies();
+  const asOf = await ingestAsOf();
+
+  // Same fresh resolved-state cross-check the Race Finder uses, so a resolved race is
+  // never offered as a free slot.
+  const snapshotRaceIds = [...new Set([...openRaw.map((l) => l.raceId), ...Object.values(racingByPet)])];
+  let resolvedRaceIds = new Set<number>();
+  if (snapshotRaceIds.length) {
+    const { data } = await db().from("races").select("race_id").in("race_id", snapshotRaceIds).eq("resolved", true);
+    resolvedRaceIds = new Set((data ?? []).map((r) => r.race_id as number));
+  }
+
+  // Open FREE races only (entry fee 0), forming with at least one slot, not resolved.
+  const freeRaces: DevelopRace[] = openRaw
+    .filter((l) => !resolvedRaceIds.has(l.raceId) && BigInt(l.entryFeeWei || "0") === 0n && l.openSlots > 0)
+    .map((l) => ({ raceId: l.raceId, trackLength: l.trackLength, fieldSize: l.fieldSize, petCount: l.petCount, openSlots: l.openSlots, raceTemp: l.raceTemp }));
+  const openFreeSlots = freeRaces.reduce((a, r) => a + r.openSlots, 0);
+
+  const base = {
+    freeRaces,
+    openFreeSlots,
+    asOf,
+    fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null,
+    delayed,
+    meta: { source: SOURCE, note: DEVELOP_NOTE },
+  };
+  if (!wallet) return { wallet: null, candidates: [], ...base };
+
+  // The wallet's hatched horses with their reveal data.
+  type PetRow = { id: number; name: string | null; rarity: number | null; races_run: number | null; reveals_start: number | null; reveals_speed: number | null; reveals_stamina: number | null; reveals_finish: number | null };
+  const pets: PetRow[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data } = await db()
+      .from("pets")
+      .select("id, name, rarity, races_run, reveals_start, reveals_speed, reveals_stamina, reveals_finish")
+      .eq("owner_address", wallet).eq("hatched", true).order("id", { ascending: true }).range(from, from + 999);
+    if (!data || data.length === 0) break;
+    pets.push(...(data as PetRow[]));
+    if (data.length < 1000) break;
+  }
+  const ids = pets.map((p) => p.id);
+
+  // Overall reveal progress (0..1) per pet.
+  const revealByPet = new Map<number, number>();
+  for (let i = 0; i < ids.length; i += 1000) {
+    const { data } = await db().from("pet_scores").select("pet_id, reveal_progress").in("pet_id", ids.slice(i, i + 1000));
+    for (const s of data ?? []) revealByPet.set(s.pet_id as number, Number(s.reveal_progress ?? 0));
+  }
+
+  // Eligibility, reusing the shipped contract-authoritative signal. racing = in an
+  // unresolved race (snapshot/DB) OR contract-locked; resting = cannot race and not
+  // racing; otherwise available.
+  const status = await petRaceStatus(ids, wallet);
+  const statusOf = (id: number): DevelopCandidate["status"] => {
+    const s = status.get(id);
+    const rid = racingByPet[id];
+    const inRace = (rid != null && !resolvedRaceIds.has(rid)) || s?.locked === true;
+    if (inRace) return "racing";
+    if (s?.canRace === false) return "resting";
+    return "available";
+  };
+
+  const candidates: DevelopCandidate[] = pets.map((p) => ({
+    petId: p.id,
+    name: p.name,
+    rarity: p.rarity ?? 0,
+    revealPct: revealByPet.get(p.id) ?? 0,
+    reveals: { start: p.reveals_start ?? 0, speed: p.reveals_speed ?? 0, stamina: p.reveals_stamina ?? 0, finish: p.reveals_finish ?? 0 },
+    racesRun: p.races_run ?? 0,
+    status: statusOf(p.id),
+  }));
+
+  // Rank by development NEED: least revealed first, then fewer races run.
+  candidates.sort((a, b) => a.revealPct - b.revealPct || a.racesRun - b.racesRun || a.petId - b.petId);
+
+  return { wallet, candidates, ...base };
 }
 
 // ---- Follow your entry, live race tracking (read-only) ----------------------

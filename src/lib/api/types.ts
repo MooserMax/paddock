@@ -378,6 +378,39 @@ export interface LobbyRow {
   edge: LobbyEdge | null; // present when a wallet/pet is given and a horse is eligible
 }
 
+// ---- Develop Mode: bulk reveal-farming into free races ----------------------
+export interface DevelopCandidate {
+  petId: number;
+  name: string | null;
+  rarity: number;
+  revealPct: number; // 0..1 overall reveal progress (less is more to gain)
+  reveals: { start: number; speed: number; stamina: number; finish: number }; // per-stat reveal counts
+  racesRun: number;
+  status: "available" | "racing" | "resting"; // reuses the shipped eligibility signal
+}
+
+export interface DevelopRace {
+  raceId: number;
+  trackLength: number;
+  fieldSize: number;
+  petCount: number;
+  openSlots: number;
+  raceTemp: string | null;
+}
+
+export interface DevelopResponse {
+  wallet: string | null;
+  // The wallet's hatched horses ranked by DEVELOPMENT NEED (least revealed first),
+  // the opposite of Race Finder's win-edge ranking.
+  candidates: DevelopCandidate[];
+  freeRaces: DevelopRace[]; // open, forming, entry fee 0, with at least one slot
+  openFreeSlots: number; // total free slots available right now
+  asOf: string | null;
+  fetchedAt: string | null;
+  delayed: boolean;
+  meta: { source: string; note: string };
+}
+
 export interface LobbyResponse {
   lobbies: LobbyRow[];
   wallet: string | null;

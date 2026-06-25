@@ -115,3 +115,36 @@ export function assertKnownGoodJoinTx(tx: JoinTx, raceId: number, petId: number,
   if (tx.data.length !== STANDARD_JOIN_CALLDATA_LEN) throw new Error("unexpected calldata length");
   if (tx.value !== expectedValue) throw new Error("entry value mismatch");
 }
+
+// ---- Develop Mode: batched FREE entry (EIP-5792) ----------------------------
+// Race your least-revealed horses into open FREE races to farm stat reveals, in one
+// approval. FREE-ONLY by construction: every call is value 0, so no funds are ever at
+// risk, and the paid path is not involved at all.
+
+// Practical batch ceiling, matched to field/daily limits. Never submit more than this
+// in one approval, so the review stays scannable and the gas stays bounded.
+export const DEVELOP_MAX_BATCH = 8;
+
+// One-flag gate for Develop Mode (free-only, asset-safe). Live by default; flip to
+// false to hide the feature in one line if needed.
+export const DEVELOP_MODE_ENABLED = true;
+
+// One call in a Develop batch: the 0x-hex shape EIP-5792 sendCalls expects.
+export interface BatchCall {
+  to: Hex;
+  data: Hex;
+  value: Hex; // always "0x0" here, asserted below
+}
+
+// Build a single FREE join call for a batch. It goes through the SAME asserted path
+// as a single entry, so the pinned racing contract, the selector, the exact calldata
+// shape, AND value 0 are all verified for EVERY call before it can enter a batch. A
+// non-free or wrong-target call can never be constructed here: buildJoinTx("0")
+// resolves value 0, and assertKnownGoodJoinTx enforces the contract allowlist and the
+// zero value. This is the per-call security gate for the batch.
+export function buildFreeJoinCall(raceId: number, petId: number): BatchCall {
+  const tx = buildJoinTx(raceId, petId, "0"); // free: resolveEntryValueWei -> 0n
+  assertKnownGoodJoinTx(tx, raceId, petId, 0n); // contract + selector + calldata + value 0
+  if (tx.value !== 0n) throw new Error("develop batch call must be value 0");
+  return { to: tx.to, data: tx.data, value: "0x0" };
+}
