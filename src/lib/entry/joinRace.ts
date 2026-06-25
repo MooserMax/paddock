@@ -41,7 +41,7 @@ export function isFreeEntry(entryFeeWei: string | null | undefined): boolean {
 // whole paid path below is built and tested; flipping this one constant to true is
 // the ONLY change needed to enable it. Stays false until a human signs one real paid
 // entry under the finished flow and verifies it on-chain.
-export const PAID_ENTRY_ENABLED = false;
+export const PAID_ENTRY_ENABLED = true;
 
 // Validated paid entry value. The wallet charge is entryFee + the PROTOCOL surcharge
 // ONLY; the jackpot (2.5%) and creator (1-10%) fees are allocated contract-side from
