@@ -1217,7 +1217,7 @@ export async function getRecords(trackParam: number | null, mode: RecordMode, wi
 import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge, RaceTrackingDTO, RaceTrackEntrant } from "./types";
 import { getOpenLobbies, POLL_MS, type OpenLobby } from "../lobbies";
 import { fetchRace } from "../gigaverse";
-import { dailyExhausted } from "../raceLimit";
+import { petRaceStatus } from "../raceLimit";
 
 const LOBBY_NOTE =
   "Live forming lobbies, polled politely and cached a few seconds, so the data may lag a little. Your edge is an estimate for the field as it stands, and it shifts as horses enter; it is not a guarantee.";
@@ -1311,26 +1311,38 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
   }
   const personalized = candidateIds.length > 0;
 
-  // Eligibility, computed from STABLE signals so the recommendation does not flicker:
-  //  - resting: hit the daily race limit, a per-pet event-count verdict that does not
-  //    depend on any one race's joinability (the old per-race joinRace simulation
-  //    conflated full or mid-transition races with exhaustion and oscillated).
-  //  - racing: currently entered in a forming lobby, so busy and unable to join
-  //    another race right now, derived from the live snapshot, also stable.
-  // A pet is recommendable only if it is neither. Resting takes precedence in
-  // labeling (done for the day, not just momentarily busy).
+  // Eligibility, two stable states:
+  //  - racing: currently in an unresolved race (busy now), from the fresh
+  //    snapshot+DB signal (covers full-but-running races, releases the moment the
+  //    race resolves).
+  //  - resting: at the daily race limit, read from the contract's authoritative
+  //    canPetRace view (juiced-aware cap over the real reset cycle), NOT a
+  //    reconstructed window. See dailyExhausted in raceLimit.ts.
+  // A pet is recommendable only if it is neither. Racing is decided first; a horse
+  // that is racing reads canPetRace=false because it is locked, so it must be
+  // labeled racing, not resting.
   let resting = new Set<number>();
   let racing = new Set<number>();
   if (personalized) {
-    resting = await dailyExhausted(candidateIds);
-    // A candidate is racing if the fresh snapshot has it in an unresolved race that
-    // paddock-db does NOT mark resolved. racingByPet covers full-but-running races,
-    // not just forming lobbies, and the resolved cross-check releases a horse the
-    // moment its race resolves, so a horse never stays stuck as "racing".
+    // The owner whose pets these are: the queried wallet, or for a bare ?pet lookup
+    // the pet's recorded owner (the contract's canPetRace needs the holder).
+    let eligOwner = wallet;
+    if (!eligOwner && petParam != null) {
+      const { data: ownerRow } = await db().from("pets").select("owner_address").eq("id", petParam).maybeSingle();
+      eligOwner = (ownerRow?.owner_address as string) ?? null;
+    }
+    const status = await petRaceStatus(candidateIds, eligOwner);
+    // Racing (busy now): in an unresolved race per the fresh snapshot+DB signal, OR
+    // contract-locked (catches a race the snapshot has not picked up). Decided first.
     racing = new Set(candidateIds.filter((id) => {
       const rid = racingByPet[id];
-      return rid != null && !resolvedRaceIds.has(rid) && !resting.has(id);
+      const inSnapshot = rid != null && !resolvedRaceIds.has(rid);
+      return inSnapshot || status.get(id)?.locked === true;
     }));
+    // Resting (daily limit): the contract says the horse cannot race and it is not
+    // racing. "Absent from status" means the read was unavailable, so it is left
+    // recommendable rather than hidden.
+    resting = new Set(candidateIds.filter((id) => status.get(id)?.canRace === false && !racing.has(id)));
   }
   const unavailable = new Set<number>([...resting, ...racing]);
 
