@@ -1364,6 +1364,7 @@ export async function getLobbies(walletParam: string | null, petParam: number | 
       raceId: l.raceId, trackLength: l.trackLength, raceTemp: l.raceTemp,
       fieldSize: l.fieldSize, petCount: l.petCount, openSlots: l.openSlots,
       entryFeeWei: l.entryFeeWei, poolWei: l.poolWei, payoutBps: l.payoutBps,
+      protocolFeeBps: l.protocolFeeBps, protocolFeeBpsJuiced: l.protocolFeeBpsJuiced,
       entrants, fieldStrength, edge,
     };
   });

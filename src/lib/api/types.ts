@@ -367,6 +367,10 @@ export interface LobbyRow {
   entryFeeWei: string;
   poolWei: string | null;
   payoutBps: number[];
+  // Live protocol surcharge rates from race config, used to compute the exact paid
+  // entry value per juiced tier. Null until fee config has loaded for the race.
+  protocolFeeBps: number | null;
+  protocolFeeBpsJuiced: number | null;
   entrants: LobbyEntrant[];
   fieldStrength: { avgElo: number | null; sharkCount: number; topCq: number };
   edge: LobbyEdge | null; // present when a wallet/pet is given and a horse is eligible

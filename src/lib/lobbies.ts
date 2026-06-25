@@ -51,6 +51,11 @@ export interface OpenLobby {
   entryFeeWei: string;
   poolWei: string | null;
   payoutBps: number[];
+  // Live protocol surcharge rates from the race config, for the paid-entry value.
+  // Null until the fee enrichment has run; both tiers are carried so the entry path
+  // never hardcodes a rate.
+  protocolFeeBps: number | null;
+  protocolFeeBpsJuiced: number | null;
   entries: { petId: number; ownerAddress: string | null; juiced: boolean }[];
 }
 
@@ -64,6 +69,8 @@ interface RaceState {
   block: number; // last block this race was touched, for pruning
   entryFeeWei: string;
   poolWei: string | null;
+  protocolFeeBps: number | null;
+  protocolFeeBpsJuiced: number | null;
   feeKnown: boolean; // whether the (optional) fee/pool enrichment has run
 }
 
@@ -113,7 +120,7 @@ function decodeConfig(data: string): { fieldSize: number; trackLength: number } 
 function ensureRace(raceId: number, block: number): RaceState {
   let r = races.get(raceId);
   if (!r) {
-    r = { raceId, fieldSize: 0, trackLength: 0, payoutBps: [], entries: [], resolved: false, block, entryFeeWei: "0", poolWei: null, feeKnown: false };
+    r = { raceId, fieldSize: 0, trackLength: 0, payoutBps: [], entries: [], resolved: false, block, entryFeeWei: "0", poolWei: null, protocolFeeBps: null, protocolFeeBpsJuiced: null, feeKnown: false };
     races.set(raceId, r);
   }
   if (block > r.block) r.block = block;
@@ -174,6 +181,8 @@ function formingLobbies(): OpenLobby[] {
       entryFeeWei: r.entryFeeWei,
       poolWei: r.poolWei,
       payoutBps: r.payoutBps,
+      protocolFeeBps: r.protocolFeeBps,
+      protocolFeeBpsJuiced: r.protocolFeeBpsJuiced,
       entries: r.entries.map((e) => ({ ...e })),
     });
   }
@@ -199,6 +208,9 @@ async function enrichFees(lobbies: OpenLobby[]): Promise<void> {
       if (r) {
         r.entryFeeWei = String(race.entryFee ?? "0");
         r.poolWei = race.pool != null ? String(race.pool) : null;
+        // Live protocol surcharge rates for the paid-entry value (both tiers).
+        r.protocolFeeBps = Number.isFinite(race.protocolFeeBps) ? race.protocolFeeBps : null;
+        r.protocolFeeBpsJuiced = Number.isFinite(race.protocolFeeBpsJuiced) ? race.protocolFeeBpsJuiced : null;
         const juicedByPet = new Map((race.entries ?? []).map((e) => [e.petId, !!e.juiced]));
         for (const e of r.entries) e.juiced = juicedByPet.get(e.petId) ?? e.juiced;
         r.feeKnown = true;

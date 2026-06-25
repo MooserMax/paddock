@@ -7,7 +7,7 @@ import { useLoginWithAbstract } from "@abstract-foundation/agw-react";
 import type { LobbyRow, LobbyResponse } from "@/lib/api/types";
 import { shortAddress, formatEth } from "@/lib/format";
 import { setWalletFlag } from "@/lib/walletFlag";
-import { buildJoinTx, assertKnownGoodJoinTx, isFreeEntry, PETRACING_CONTRACT, JOIN_RACE_SELECTOR } from "@/lib/entry/joinRace";
+import { buildJoinTx, assertKnownGoodJoinTx, resolveEntryValueWei, isFreeEntry, PAID_ENTRY_ENABLED, PETRACING_CONTRACT, JOIN_RACE_SELECTOR, type EntryFeeTier } from "@/lib/entry/joinRace";
 
 // One-click entry UI. Non-custodial: the user connects their own wallet and signs
 // their own transaction; nothing here holds keys or auto-signs. The entry is the
@@ -58,9 +58,15 @@ export function ConnectBar() {
   );
 }
 
-type Phase = "review" | "validating" | "blocked" | "signing" | "pending" | "confirmed" | "rejected" | "failed";
+type Phase = "review" | "validating" | "blocked" | "juiceBlocked" | "signing" | "pending" | "confirmed" | "rejected" | "failed";
 
 function bandColor(): string { return "var(--glow)"; }
+
+// wei (bigint) -> ETH string, enough precision to show the 1% vs 3% surcharge
+// distinction (e.g. 0.0002525 vs 0.0002575) without rounding it away.
+function ethFromWei(wei: bigint): string {
+  return formatEth(Number(wei) / 1e18, 7);
+}
 
 // The confirm-before-sign modal: shows exactly what will be signed, re-validates and
 // SIMULATES immediately before the wallet prompt, and only prompts if the simulation
@@ -74,6 +80,30 @@ export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby
   const [hash, setHash] = useState<`0x${string}` | undefined>(undefined);
   const { isSuccess: confirmed, isError: confirmFailed } = useWaitForTransactionReceipt({ hash });
 
+  // Paid entry. Juiced defaults ON: it is the better deal (1% protocol fee + 2x
+  // jackpot odds vs 3%), and most entrants are juiced. The toggle selects which tier
+  // Paddock ATTEMPTS; the horse's real juiced state is pre-committed on-chain, so the
+  // mandatory pre-sign simulation is what confirms the value matches before signing,
+  // and a juiced-tier revert falls to an explicit "enter standard?" choice below.
+  const paid = !isFreeEntry(lobby.entryFeeWei);
+  const [juiced, setJuiced] = useState(true);
+  const tierFor = useCallback(
+    (j: boolean): EntryFeeTier => ({ protocolFeeBps: lobby.protocolFeeBps, protocolFeeBpsJuiced: lobby.protocolFeeBpsJuiced, juiced: j }),
+    [lobby.protocolFeeBps, lobby.protocolFeeBpsJuiced]
+  );
+  // Live total for the current toggle state, recomputed each render so the displayed
+  // value always matches what will be signed. Null if it cannot be computed (paid
+  // disabled, or fee config not loaded yet).
+  let sendValue: bigint | null = null;
+  try {
+    sendValue = resolveEntryValueWei(lobby.entryFeeWei, paid ? tierFor(juiced) : undefined);
+  } catch {
+    sendValue = null;
+  }
+  const baseFeeWei = paid ? BigInt(lobby.entryFeeWei || "0") : 0n;
+  const surchargeWei = sendValue != null ? sendValue - baseFeeWei : null;
+  const ratePct = juiced ? "1%" : "3%";
+
   useEffect(() => {
     if (confirmed && phase === "pending") { setPhase("confirmed"); onEntered(); }
     else if (confirmFailed && phase === "pending") setPhase("failed");
@@ -84,7 +114,10 @@ export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby
   const evEth = edge.evWei != null ? Number(edge.evWei) / 1e18 : null;
   const payout = lobby.payoutBps.map((b) => `${(b / 100).toFixed(0)}%`).join(" / ");
 
-  const enter = useCallback(async () => {
+  // juicedOverride lets the "enter standard instead" path retry at the non-juiced tier
+  // immediately, without waiting for the toggle's state update to settle.
+  const enter = useCallback(async (juicedOverride?: boolean) => {
+    const useJuiced = juicedOverride ?? juiced;
     setReason("");
     try {
       // (a) Re-validate the live race state immediately before signing.
@@ -96,18 +129,36 @@ export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby
       if (!fresh.edge || fresh.edge.petId !== edge.petId) { setReason("Your recommended horse changed for this field. Reopen to see the new pick."); setPhase("blocked"); return; }
       if (fresh.entrants.some((e) => e.petId === edge.petId)) { setReason("This horse is already entered in this race."); setPhase("blocked"); return; }
 
-      // (b)+(c) Build the exact tx, verify it matches the known-good shape, then
-      // SIMULATE it from the connected account. A revert here means a precondition
-      // failed (ownership, idle, slot, cooldown, any rule), so we block before the
-      // wallet prompt and never submit a doomed transaction.
-      const tx = buildJoinTx(lobby.raceId, edge.petId, lobby.entryFeeWei);
-      assertKnownGoodJoinTx(tx, lobby.raceId, edge.petId);
+      // (b) Compute the EXACT value for the tier being attempted from the LIVE bps,
+      // then build the tx and verify it matches the known-good shape AND that value.
+      // Paid is gated: resolveEntryValueWei throws while PAID_ENTRY_ENABLED is false,
+      // so no paid value can be built in production.
+      const tier = paid ? tierFor(useJuiced) : undefined;
+      let expectedValue: bigint;
+      try {
+        expectedValue = resolveEntryValueWei(lobby.entryFeeWei, tier);
+      } catch {
+        setReason("Paid entry is not available yet."); setPhase("blocked"); return;
+      }
+      const tx = buildJoinTx(lobby.raceId, edge.petId, lobby.entryFeeWei, tier);
+      assertKnownGoodJoinTx(tx, lobby.raceId, edge.petId, expectedValue);
       if (!publicClient) { setReason("Wallet client unavailable, reconnect and retry."); setPhase("blocked"); return; }
+
+      // (c) MANDATORY simulation at the EXACT value, before the wallet ever prompts.
+      // The contract requires the exact tier value, so a juiced entry whose horse is
+      // not actually juiced (or any other unmet precondition) reverts HERE and is
+      // never signed, no funds at risk. A juiced-tier revert is surfaced as an
+      // explicit "enter standard instead?" choice rather than silently re-pricing 3x.
       try {
         await publicClient.estimateGas({ account: walletAddress as `0x${string}`, to: tx.to, data: tx.data, value: tx.value });
       } catch {
-        setReason("This horse cannot enter right now. The race may have just filled, or the horse is not eligible.");
-        setPhase("blocked");
+        if (paid && useJuiced) {
+          setReason("The juiced entry (1% fee plus 2x jackpot odds) did not go through for this horse right now. You can enter as a standard race (3% fee) instead, or cancel.");
+          setPhase("juiceBlocked");
+        } else {
+          setReason("This horse cannot enter right now. The race may have just filled, or the horse is not eligible.");
+          setPhase("blocked");
+        }
         return;
       }
 
@@ -122,7 +173,7 @@ export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby
       else if (/insufficient funds/i.test(m)) { setReason("Insufficient funds for gas."); setPhase("failed"); }
       else { setReason(m.slice(0, 140) || "The transaction failed."); setPhase("failed"); }
     }
-  }, [publicClient, sendTransactionAsync, lobby, edge, walletAddress]);
+  }, [publicClient, sendTransactionAsync, lobby, edge, walletAddress, paid, juiced, tierFor]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" style={{ background: "rgba(0,0,0,0.6)" }} onClick={onClose}>
@@ -142,8 +193,37 @@ export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby
           <Row k="Entry fee" v={fee > 0 ? `${formatEth(fee / 1e18, 4)}` : "free"} />
           <Row k="Pool" v={pool > 0 ? `${formatEth(pool / 1e18, 4)}` : "none yet"} />
           <Row k="Payout split" v={payout || "winner takes all"} />
+          {/* Paid only: the protocol surcharge for the chosen tier, and the exact
+              total the wallet sends. Jackpot and creator fees come out of the pool,
+              not the wallet charge, so they are not added here. */}
+          {paid && <Row k={`Protocol fee (${ratePct})`} v={surchargeWei != null ? ethFromWei(surchargeWei) : "unknown"} />}
+          {paid && <Row k="You send" v={sendValue != null ? ethFromWei(sendValue) : "unavailable"} accent />}
           <Row k="Your edge" v={edge.band} accent />
         </dl>
+
+        {/* Paid only: juice toggle, default ON. Selects the tier Paddock attempts; the
+            chain confirms via the pre-sign simulation before anything is signed. */}
+        {paid && (
+          <div className="mt-3 rounded-md border p-3" style={{ borderColor: "var(--line-strong)" }}>
+            <div className="flex items-center justify-between gap-3">
+              <span className="type-data text-ink">Juice this entry</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={juiced}
+                onClick={() => setJuiced((j) => !j)}
+                disabled={phase === "validating" || phase === "signing"}
+                className="type-micro uppercase tracking-wider rounded-full border px-3 py-1 transition-paddock disabled:opacity-50"
+                style={{ borderColor: juiced ? "var(--glow)" : "var(--line-strong)", color: juiced ? "var(--glow)" : "var(--ink-faint)" }}
+              >
+                {juiced ? "On" : "Off"}
+              </button>
+            </div>
+            <p className="type-micro mt-1.5 normal-case text-ink-faint">
+              Juiced: {lobby.protocolFeeBpsJuiced != null ? `${(lobby.protocolFeeBpsJuiced / 100).toFixed(0)}%` : "1%"} protocol fee and 2x jackpot odds. Standard: {lobby.protocolFeeBps != null ? `${(lobby.protocolFeeBps / 100).toFixed(0)}%` : "3%"} protocol fee. Jackpot and creator fees are paid from the pool, not added to your charge.
+            </p>
+          </div>
+        )}
 
         <p className="type-micro mt-2 normal-case text-ink-faint">
           {edge.band}, {edge.bandRange}{evEth != null ? `, EV est ${formatEth(evEth, 4)}` : ""}. This is an estimate, not yet calibrated at these odds, and the field shifts as horses enter. Never a guaranteed win.
@@ -151,10 +231,11 @@ export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby
 
         {/* Exactly what gets signed */}
         <p className="type-micro mt-2 normal-case text-ink-faint">
-          You will sign one transaction to {shortAddress(PETRACING_CONTRACT)} (PetRacingSystem), method join ({JOIN_RACE_SELECTOR}), with your horse and this race, value {fee > 0 ? "the entry fee" : "0"}. Paddock never holds your keys or funds.
+          You will sign one transaction to {shortAddress(PETRACING_CONTRACT)} (PetRacingSystem), method join ({JOIN_RACE_SELECTOR}), with your horse and this race, value {paid ? (sendValue != null ? ethFromWei(sendValue) : "the entry fee plus protocol fee") : "0"}. Paddock never holds your keys or funds.
         </p>
 
         {phase === "blocked" && <p className="type-data mt-3" style={{ color: "var(--gold)" }}>{reason}</p>}
+        {phase === "juiceBlocked" && <p className="type-data mt-3" style={{ color: "var(--gold)" }}>{reason}</p>}
         {phase === "rejected" && <p className="type-data mt-3 text-ink-soft">{reason}</p>}
         {phase === "failed" && <p className="type-data mt-3" style={{ color: "var(--brick)" }}>{reason}</p>}
         {phase === "pending" && <p className="type-data mt-3 text-ink-soft">Transaction sent, waiting for confirmation. Your entrant appears on the next lobby refresh.</p>}
@@ -162,9 +243,19 @@ export function EntryModal({ lobby, walletAddress, onClose, onEntered }: { lobby
 
         <div className="mt-4 flex gap-2">
           {(phase === "review" || phase === "blocked" || phase === "rejected" || phase === "failed") && (
-            <button onClick={enter} className="type-data flex-1 rounded-md px-4 py-2.5" style={{ background: "var(--action)", color: "#14110f" }}>
+            <button onClick={() => enter()} className="type-data flex-1 rounded-md px-4 py-2.5" style={{ background: "var(--action)", color: "#14110f" }}>
               {phase === "review" ? "Enter in one signature" : "Try again"}
             </button>
+          )}
+          {/* Juiced-tier revert: explicit choice, never a silent 3x re-price. Enter
+              standard retries at the non-juiced tier; cancel closes. */}
+          {phase === "juiceBlocked" && (
+            <>
+              <button onClick={() => { setJuiced(false); enter(false); }} className="type-data flex-1 rounded-md px-4 py-2.5" style={{ background: "var(--action)", color: "#14110f" }}>
+                Enter standard ({lobby.protocolFeeBps != null ? `${(lobby.protocolFeeBps / 100).toFixed(0)}%` : "3%"})
+              </button>
+              <button onClick={onClose} className="type-data flex-1 rounded-md border px-4 py-2.5 text-ink" style={{ borderColor: "var(--line-strong)" }}>Cancel</button>
+            </>
           )}
           {(phase === "validating" || phase === "signing") && (
             <button disabled className="type-data flex-1 rounded-md px-4 py-2.5 opacity-70" style={{ background: "var(--action)", color: "#14110f" }}>
@@ -194,7 +285,11 @@ function Row({ k, v, accent }: { k: string; v: string; accent?: boolean }) {
 export function EntryButton({ lobby, walletAddress, onEntered }: { lobby: LobbyRow; walletAddress: string; onEntered: () => void }) {
   const [open, setOpen] = useState(false);
   if (!lobby.edge) return null;
-  if (!isFreeEntry(lobby.entryFeeWei)) {
+  // Paid entry is fully built but gated behind PAID_ENTRY_ENABLED. While the flag is
+  // false, paid races stay "coming soon" and no paid entry can be opened or signed.
+  // Flipping that one flag to true turns this branch off and paid races get the same
+  // one-signature entry as free races, no other change required.
+  if (!isFreeEntry(lobby.entryFeeWei) && !PAID_ENTRY_ENABLED) {
     return <span className="type-micro uppercase tracking-wider text-ink-faint">paid entry coming soon</span>;
   }
   return (
