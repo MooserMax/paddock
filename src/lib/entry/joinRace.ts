@@ -1,4 +1,4 @@
-import { encodeAbiParameters, parseAbiParameters, type Hex } from "viem";
+import { encodeAbiParameters, parseAbiParameters, encodeFunctionData, decodeEventLog, type Hex } from "viem";
 
 // One-click entry: construct the exact joinRace transaction the user signs in their
 // own wallet. Non-custodial: this builds calldata only, it never holds keys, never
@@ -128,6 +128,81 @@ export const DEVELOP_MAX_BATCH = 8;
 // One-flag gate for Develop Mode (free-only, asset-safe). Live by default; flip to
 // false to hide the feature in one line if needed.
 export const DEVELOP_MODE_ENABLED = true;
+
+// ---- Create & Fill: create your own FREE race, then batch-fill it ------------
+// Two signatures: createRace (this), then the existing EIP-5792 free batch into the
+// new raceId. createRace is the ONLY new write. Everything is value 0.
+//
+// The ABI and the free config below were VERIFIED, not guessed: the function selector
+// (0x8d6e45d3) byte-matches real on-chain createRace txs, and this exact free config
+// (entryFee 0, creatorFeeBps 100 = the on-chain minimum, payout [10000], no hook, no
+// extra params, value 0) was confirmed to succeed via eth_call from a registered
+// wallet. NOTE: createRace requires the creator wallet to be a registered Gigaverse
+// account; an unregistered wallet reverts, which the UI detects via the pre-sign
+// simulation and surfaces instead of submitting.
+export const CREATE_RACE_SELECTOR = "0x8d6e45d3" as const;
+// RACE_CREATED event; topic1 is the new raceId (matches chain.ts TOPIC_RACE_CREATED).
+export const RACE_CREATED_TOPIC = "0x6ba8300c6b71e5709b9f114f7522ac8c31ada85783b0c40d18eb76a6ba995f9b" as const;
+
+// Verified-valid bounds for a user-created free race.
+export const CREATE_FIELD_MIN = 2;
+export const CREATE_FIELD_MAX = 8;
+export const CREATE_TRACK_LENGTHS = [500, 1200, 2400, 3000] as const;
+const CREATE_MIN_CREATOR_FEE_BPS = 100n; // on-chain minimum (creatorFeeBps below this reverts)
+
+const CREATE_RACE_ABI = [
+  {
+    name: "createRace",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "fieldSize", type: "uint256" },
+      { name: "trackLength", type: "uint256" },
+      { name: "entryFeeWei", type: "uint256" },
+      { name: "creatorFeeBps", type: "uint256" },
+      { name: "payoutDistribution", type: "uint256[]" },
+      { name: "joinHook", type: "address" },
+      { name: "extraParamIds", type: "uint256[]" },
+      { name: "extraParamVals", type: "uint256[]" },
+    ],
+    outputs: [{ name: "raceId", type: "uint256" }],
+  },
+] as const;
+
+const RACE_CREATED_EVENT_ABI = [
+  { name: "RaceCreated", type: "event", inputs: [{ name: "raceId", type: "uint256", indexed: true }] },
+] as const;
+
+// Build a FREE createRace tx: entry fee 0, value 0, targeting ONLY the pinned racing
+// contract. The selector is asserted against the verified createRace selector.
+export function buildCreateRaceTx(fieldSize: number, trackLength: number): { to: Hex; data: Hex; value: bigint } {
+  if (!Number.isInteger(fieldSize) || fieldSize < CREATE_FIELD_MIN || fieldSize > CREATE_FIELD_MAX) throw new Error("invalid field size");
+  if (!(CREATE_TRACK_LENGTHS as readonly number[]).includes(trackLength)) throw new Error("invalid track length");
+  const data = encodeFunctionData({
+    abi: CREATE_RACE_ABI,
+    functionName: "createRace",
+    args: [BigInt(fieldSize), BigInt(trackLength), 0n, CREATE_MIN_CREATOR_FEE_BPS, [10000n], "0x0000000000000000000000000000000000000000", [], []],
+  });
+  if (!data.toLowerCase().startsWith(CREATE_RACE_SELECTOR)) throw new Error("createRace selector mismatch");
+  return { to: PETRACING_CONTRACT as Hex, data: data as Hex, value: 0n };
+}
+
+// Parse the new raceId from a createRace receipt's RACE_CREATED log (topic1).
+export function parseCreatedRaceId(logs: readonly { address: string; topics: readonly string[]; data: string }[]): number | null {
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== PETRACING_CONTRACT.toLowerCase()) continue;
+    if ((log.topics[0] ?? "").toLowerCase() !== RACE_CREATED_TOPIC) continue;
+    try {
+      const decoded = decodeEventLog({ abi: RACE_CREATED_EVENT_ABI, data: log.data as Hex, topics: log.topics as [Hex, ...Hex[]] });
+      const raceId = (decoded.args as { raceId?: bigint }).raceId;
+      if (raceId != null) return Number(raceId);
+    } catch {
+      // topic1 fallback: the new raceId is the first indexed arg
+      if (log.topics[1]) return Number(BigInt(log.topics[1]));
+    }
+  }
+  return null;
+}
 
 // One call in a Develop batch: the 0x-hex shape EIP-5792 sendCalls expects.
 export interface BatchCall {

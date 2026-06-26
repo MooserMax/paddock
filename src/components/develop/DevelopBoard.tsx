@@ -12,6 +12,11 @@ import {
   JOIN_RACE_SELECTOR,
   DEVELOP_MAX_BATCH,
   buildFreeJoinCall,
+  buildCreateRaceTx,
+  parseCreatedRaceId,
+  CREATE_FIELD_MIN,
+  CREATE_FIELD_MAX,
+  CREATE_TRACK_LENGTHS,
 } from "@/lib/entry/joinRace";
 
 // Develop Mode: race your LEAST-revealed horses into open FREE races to farm stat
@@ -24,8 +29,9 @@ import {
 
 type Assign = { petId: number; raceId: number };
 type Dropped = { petId: number; raceId: number; reason: string };
-type Phase = "select" | "review" | "submitting" | "tracking" | "done" | "error";
+type Phase = "select" | "creating" | "review" | "submitting" | "tracking" | "done" | "error";
 type Result = { petId: number; raceId: number; ok: boolean; hash?: string };
+type Mode = "fill" | "create";
 
 const REVEAL_STATS = ["start", "speed", "stamina", "finish"] as const;
 
@@ -72,8 +78,15 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
   const [results, setResults] = useState<Result[]>([]);
   const [batchId, setBatchId] = useState<string | undefined>(undefined);
   const [note, setNote] = useState<string>("");
+  // Create & Fill: create your own free race, then batch-fill it. Two signatures.
+  const [mode, setMode] = useState<Mode>("fill");
+  const [trackLength, setTrackLength] = useState<number>(1200);
+  const [fieldSize, setFieldSize] = useState<number>(8);
+  const [createdRaceId, setCreatedRaceId] = useState<number | null>(null);
 
   const wallet = isConnected && address ? address : initialWallet;
+  // In create mode the user can pick at most fieldSize horses; in fill mode the batch cap.
+  const selectCap = mode === "create" ? fieldSize : DEVELOP_MAX_BATCH;
 
   const load = useCallback(async () => {
     if (!wallet) { setData(null); return; }
@@ -124,7 +137,7 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(petId)) next.delete(petId);
-      else if (next.size < DEVELOP_MAX_BATCH) next.add(petId);
+      else if (next.size < selectCap) next.add(petId);
       return next;
     });
   }
@@ -138,23 +151,18 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
     if (!c) return `You do not own #${petId}, or it is not race-ready.`;
     if (c.status !== "available") return `#${petId} is ${c.status === "racing" ? "racing now" : "resting (daily limit)"}.`;
     if (selected.has(petId)) return `#${petId} is already selected.`;
-    if (selected.size >= DEVELOP_MAX_BATCH) return `You can select at most ${DEVELOP_MAX_BATCH}.`;
+    if (selected.size >= selectCap) return `You can select at most ${selectCap}.`;
     setSelected((prev) => new Set(prev).add(petId));
     return null;
-  }, [candidates, selected]);
+  }, [candidates, selected, selectCap]);
 
-  // Assign selected -> free slots, then SIMULATE every call at value 0. Only calls
-  // that simulate green enter the batch; reverting ones are dropped and surfaced, so
-  // an all-or-nothing batch can never be submitted with a doomed call inside it.
-  const review = useCallback(async () => {
-    setNote("");
-    const order = available.filter((c) => selected.has(c.petId)).map((c) => c.petId);
-    if (order.length === 0) return;
-    const { placed, unplaced } = assignToSlots(order, freeRaces);
+  // SIMULATE every assigned call at value 0. Only calls that simulate green enter the
+  // batch; reverting ones are dropped and surfaced, so an all-or-nothing batch can
+  // never be submitted with a doomed call inside it. Shared by fill and create modes.
+  const runReview = useCallback(async (assignments: Assign[], unplaced: number[]) => {
     if (!publicClient) { setError("Wallet client unavailable, reconnect."); return; }
-
     const sims = await Promise.all(
-      placed.map(async (p) => {
+      assignments.map(async (p) => {
         try {
           const call = buildFreeJoinCall(p.raceId, p.petId); // asserts contract + value 0
           await publicClient.estimateGas({ account: address as `0x${string}`, to: call.to, data: call.data, value: 0n });
@@ -168,7 +176,65 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
     const dropped: Dropped[] = sims.filter((s) => !s.ok).map((s) => ({ ...s.p, reason: "would not enter right now (race may have just filled)" }));
     setPlan({ placed: green, dropped, unplaced });
     setPhase("review");
-  }, [available, selected, freeRaces, publicClient, address]);
+  }, [publicClient, address]);
+
+  // FILL mode: assign selected -> open free slots, then review.
+  const review = useCallback(async () => {
+    setNote("");
+    const order = available.filter((c) => selected.has(c.petId)).map((c) => c.petId);
+    if (order.length === 0) return;
+    const { placed, unplaced } = assignToSlots(order, freeRaces);
+    await runReview(placed, unplaced);
+  }, [available, selected, freeRaces, runReview]);
+
+  // CREATE mode, Step 1: create your own FREE race (value 0), read its raceId from the
+  // receipt, then move to Step 2 (the batched fill into that new race). createRace
+  // requires a registered Gigaverse account, so the pre-sign simulation gates an
+  // unregistered wallet with a clear message instead of submitting a doomed tx.
+  const createAndFill = useCallback(async () => {
+    setError(null); setNote("");
+    const order = available.filter((c) => selected.has(c.petId)).map((c) => c.petId).slice(0, fieldSize);
+    if (order.length === 0) { setError("Select at least one of your horses to enter."); return; }
+    if (!publicClient || !address) { setError("Wallet client unavailable, reconnect."); return; }
+    let tx: { to: `0x${string}`; data: `0x${string}`; value: bigint };
+    try {
+      const t = buildCreateRaceTx(fieldSize, trackLength);
+      tx = { to: t.to, data: t.data, value: t.value };
+    } catch {
+      setError("Invalid race configuration."); return;
+    }
+    setPhase("creating");
+    // Registration + validity gate.
+    try {
+      await publicClient.estimateGas({ account: address as `0x${string}`, to: tx.to, data: tx.data, value: 0n });
+    } catch {
+      setError("This wallet cannot create races. Creating a race requires a registered Gigaverse account; connect a registered wallet and try again.");
+      setPhase("select");
+      return;
+    }
+    let hash: `0x${string}`;
+    try {
+      hash = await sendTransactionAsync({ to: tx.to, data: tx.data, value: tx.value });
+    } catch (e: unknown) {
+      const m = (e as { message?: string })?.message ?? "";
+      setNote(/reject|denied|User rejected/i.test(m) ? "You rejected the race creation. Nothing was created." : (m.slice(0, 140) || "Race creation failed."));
+      setPhase("select");
+      return;
+    }
+    setNote("Race creation sent. Reading the new race id.");
+    try {
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const raceId = parseCreatedRaceId(receipt.logs);
+      if (raceId == null) { setError("Your race was created but Paddock could not read its id. Check your Stable, then fill it from the open races."); setPhase("select"); return; }
+      setCreatedRaceId(raceId);
+      setNote(`Race #${raceId} created. Step 2: review and enter your horses.`);
+      // Step 2: fill the new race with the selected horses (per-call simulated).
+      await runReview(order.map((petId) => ({ petId, raceId })), []);
+    } catch {
+      setError("Race creation could not be confirmed on-chain. Try filling from the open races.");
+      setPhase("select");
+    }
+  }, [available, selected, fieldSize, trackLength, publicClient, address, sendTransactionAsync, runReview]);
 
   // Submit the reviewed batch. Atomic if supported (one approval), else sequential
   // (one signature per horse) so it always works.
@@ -226,6 +292,7 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
     setPlan(null);
     setResults([]);
     setBatchId(undefined);
+    setCreatedRaceId(null);
     setNote("");
     setError(null);
     setPhase("select");
@@ -260,6 +327,53 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
 
       {error && phase !== "error" && <p className="type-micro mb-3 normal-case" style={{ color: "var(--gold)" }}>{error}</p>}
 
+      {/* Mode: fill open free races, or create your own and pack it with your horses. */}
+      {phase === "select" && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {(["fill", "create"] as Mode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => { setMode(m); setSelected(new Set()); }}
+              aria-pressed={mode === m}
+              className="type-micro uppercase tracking-wider rounded-md border px-3 py-1.5 transition-paddock"
+              style={{ borderColor: mode === m ? "var(--glow)" : "var(--line-strong)", color: mode === m ? "var(--glow)" : "var(--ink-faint)", background: mode === m ? "color-mix(in srgb, var(--glow) 12%, transparent)" : "transparent" }}
+            >
+              {m === "fill" ? "Fill open races" : "Create your own race"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* CREATE config: track length + field size, before picking horses. */}
+      {phase === "select" && mode === "create" && (
+        <div className="panel mb-3 p-4">
+          <p className="eyebrow">Step 1: your race</p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div>
+              <p className="type-micro mb-1.5 uppercase tracking-wider text-ink-faint">Distance</p>
+              <div className="flex flex-wrap gap-1.5">
+                {CREATE_TRACK_LENGTHS.map((t) => (
+                  <button key={t} onClick={() => setTrackLength(t)} aria-pressed={trackLength === t}
+                    className="type-data rounded-md border px-2.5 py-1.5 transition-paddock"
+                    style={{ borderColor: trackLength === t ? "var(--glow)" : "var(--line-strong)", color: trackLength === t ? "var(--glow)" : "var(--ink-soft)" }}>{t}m</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="type-micro mb-1.5 uppercase tracking-wider text-ink-faint">Field size</p>
+              <div className="flex flex-wrap gap-1.5">
+                {Array.from({ length: CREATE_FIELD_MAX - CREATE_FIELD_MIN + 1 }, (_, i) => i + CREATE_FIELD_MIN).map((n) => (
+                  <button key={n} onClick={() => { setFieldSize(n); setSelected((prev) => new Set([...prev].slice(0, n))); }} aria-pressed={fieldSize === n}
+                    className="type-data rounded-md border px-2.5 py-1.5 transition-paddock"
+                    style={{ borderColor: fieldSize === n ? "var(--glow)" : "var(--line-strong)", color: fieldSize === n ? "var(--glow)" : "var(--ink-soft)" }}>{n}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <p className="type-micro mt-3 normal-case text-ink-faint">A free race ({trackLength}m, up to {fieldSize} horses, 0 ETH). Step 1 creates it (one signature), Step 2 enters your selected horses in one batch.</p>
+        </div>
+      )}
+
       {/* SELECT */}
       {phase === "select" && (
         <>
@@ -275,9 +389,9 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
                   key={c.petId}
                   c={c}
                   selected={selected.has(c.petId)}
-                  disabled={c.status !== "available" || (!selected.has(c.petId) && selected.size >= DEVELOP_MAX_BATCH)}
-                  assignedRace={selected.has(c.petId) ? raceForPet.get(c.petId) ?? null : undefined}
-                  noSlot={selected.has(c.petId) && unplacedSet.has(c.petId)}
+                  disabled={c.status !== "available" || (!selected.has(c.petId) && selected.size >= selectCap)}
+                  assignedRace={mode === "fill" && selected.has(c.petId) ? raceForPet.get(c.petId) ?? null : undefined}
+                  noSlot={mode === "fill" && selected.has(c.petId) && unplacedSet.has(c.petId)}
                   onToggle={() => toggle(c.petId)}
                 />
               ))}
@@ -287,22 +401,34 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
           {/* Manual horse-ID add, alongside the ranked picker. */}
           {candidates.length > 0 && <DevelopManualAdd onAdd={addById} />}
 
-          {/* Action bar */}
+          {/* Action bar: capacity + the mode's action. */}
           <div className="sticky bottom-3 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border p-3" style={{ borderColor: "var(--line-strong)", background: "var(--paper-raised)" }}>
-            <span className="type-data text-ink-soft">
-              {selected.size} selected{selected.size >= DEVELOP_MAX_BATCH ? ` (max ${DEVELOP_MAX_BATCH})` : ""}, {data?.openFreeSlots ?? 0} free {(data?.openFreeSlots ?? 0) === 1 ? "slot" : "slots"} open
-              {unplacedSet.size > 0 ? <span style={{ color: "var(--gold)" }}>, {unplacedSet.size} cannot be placed</span> : ""}
-            </span>
-            <button
-              onClick={review}
-              disabled={selected.size === 0 || freeRaces.length === 0}
-              className="type-data rounded-md px-5 py-2.5 disabled:opacity-40"
-              style={{ background: "var(--action)", color: "#14110f" }}
-            >
-              Review batch
-            </button>
+            {mode === "fill" ? (
+              <span className="type-data text-ink-soft">
+                {selected.size} selected{selected.size >= selectCap ? ` (max ${selectCap})` : ""}, {data?.openFreeSlots ?? 0} free {(data?.openFreeSlots ?? 0) === 1 ? "slot" : "slots"} open
+                {unplacedSet.size > 0 ? <span style={{ color: "var(--gold)" }}>, {unplacedSet.size} cannot be placed</span> : ""}
+              </span>
+            ) : (
+              <span className="type-data text-ink-soft">{selected.size} of up to {fieldSize} selected for your {trackLength}m race</span>
+            )}
+            {mode === "fill" ? (
+              <button onClick={review} disabled={selected.size === 0 || freeRaces.length === 0} className="type-data rounded-md px-5 py-2.5 disabled:opacity-40" style={{ background: "var(--action)", color: "#14110f" }}>
+                Review batch
+              </button>
+            ) : (
+              <button onClick={createAndFill} disabled={selected.size === 0} className="type-data rounded-md px-5 py-2.5 disabled:opacity-40" style={{ background: "var(--action)", color: "#14110f" }}>
+                Create race (Step 1)
+              </button>
+            )}
           </div>
         </>
+      )}
+
+      {phase === "creating" && (
+        <div className="panel mt-4 p-5 text-center">
+          <p className="type-card-title text-ink">Creating your race</p>
+          <p className="type-body mt-1 text-ink-soft">{note || "Confirm the race creation in your wallet (Step 1 of 2). This creates a free race at 0 ETH."}</p>
+        </div>
       )}
 
       {/* REVIEW: the full batch, every horse, every race, total 0 ETH. */}
