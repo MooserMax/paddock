@@ -930,37 +930,50 @@ export async function getSiteStats(): Promise<SiteStats> {
 // ---- Races feed -------------------------------------------------------------
 import type { RaceListResponse, RaceListItem } from "./types";
 
+// Bounds the participant-filter IN list. A wallet that entered more than this many
+// races only filters over its most recent ones (race_id desc), which covers the
+// recent-first feed; deep pagination past that for a hyperactive wallet is the only
+// edge this caps, and it keeps the query fast.
+const WALLET_RACE_CAP = 2000;
+
 export async function getRecentRaces(track: number | null, limit: number, offset: number, wallet?: string | null): Promise<RaceListResponse> {
   const owner = wallet && /^0x[0-9a-fA-F]{40}$/.test(wallet) ? wallet.toLowerCase() : null;
-  // Participant filter: an INNER join to race_entries on the wallet's owner_address
-  // (race_entries_owner_idx) returns only races this wallet entered, and the embedded
-  // rows are filtered to that owner, so each race also carries the wallet's own
-  // entrant(s) and finish in the SAME query. No full scan: the owner index drives it.
-  // The embed is not in the generated relationship types, so this one query is built
-  // through an untyped builder and its rows are read via the explicit shape below.
-  type RaceFeedRow = {
-    race_id: number; track_length: number | null; field_size: number | null; race_temp: string | null;
-    resolved_at: string | null; payout_bps: number[] | null;
-    race_entries?: { pet_id: number; owner_address: string | null; finish_position: number | null }[];
-  };
-  type RaceQ = {
-    eq: (c: string, v: unknown) => RaceQ;
-    order: (c: string, o: unknown) => RaceQ;
-    range: (a: number, b: number) => Promise<{ data: RaceFeedRow[] | null; error: { message: string } | null }>;
-  };
-  const select = (s: string) => (db().from("races") as unknown as { select: (s: string) => RaceQ }).select(s);
-  let q = select(
-    owner
-      ? "race_id, track_length, field_size, race_temp, resolved_at, payout_bps, race_entries!inner(pet_id, owner_address, finish_position)"
-      : "race_id, track_length, field_size, race_temp, resolved_at, payout_bps"
-  );
-  q = q.eq("resolved", true).eq("hydrated", true);
-  if (owner) q = q.eq("race_entries.owner_address", owner);
-  if (track) q = q.eq("track_length", track);
-  const { data, error } = await q.order("resolved_at", { ascending: false, nullsFirst: false }).range(offset, offset + limit - 1);
+
+  // Participant filter, done in two indexed queries (race_entries has no FK to races,
+  // so a PostgREST embed is unavailable): first the wallet's own entries by owner
+  // (race_entries_owner_idx), then the races for exactly those ids. No full scan.
+  // The wallet's entries also give us the per-row "you: ... finish" annotation.
+  type MineRow = { petId: number; finishPosition: number | null };
+  const mineByRace = new Map<number, MineRow[]>();
+  let restrictRaceIds: number[] | null = null;
+  if (owner) {
+    const { data: myEntries, error: meErr } = await db()
+      .from("race_entries")
+      .select("race_id, pet_id, finish_position")
+      .eq("owner_address", owner)
+      .order("race_id", { ascending: false }) // race_id tracks recency; cap bounds the IN list
+      .limit(WALLET_RACE_CAP);
+    if (meErr) throw new Error(`my-races entries query failed: ${meErr.message}`);
+    for (const e of myEntries ?? []) {
+      const rid = e.race_id as number;
+      const list = mineByRace.get(rid) ?? [];
+      list.push({ petId: e.pet_id as number, finishPosition: (e.finish_position as number | null) ?? null });
+      mineByRace.set(rid, list);
+    }
+    restrictRaceIds = [...mineByRace.keys()];
+  }
+
+  let rq = db()
+    .from("races")
+    .select("race_id, track_length, field_size, race_temp, resolved_at, payout_bps")
+    .eq("resolved", true)
+    .eq("hydrated", true);
+  if (restrictRaceIds) rq = rq.in("race_id", restrictRaceIds.length ? restrictRaceIds : [-1]);
+  if (track) rq = rq.eq("track_length", track);
+  const { data, error } = await rq.order("resolved_at", { ascending: false, nullsFirst: false }).range(offset, offset + limit - 1);
   if (error) throw new Error(`races feed query failed: ${error.message}`);
 
-  const raceIds = (data ?? []).map((r) => r.race_id);
+  const raceIds = (data ?? []).map((r) => r.race_id as number);
   // Winner = finish_position 1 for each race, fetched in one query then mapped.
   const { data: winners } = await db()
     .from("race_entries")
@@ -968,16 +981,6 @@ export async function getRecentRaces(track: number | null, limit: number, offset
     .in("race_id", raceIds.length ? raceIds : [-1])
     .eq("finish_position", 1);
   const winnerByRace = new Map((winners ?? []).map((w) => [w.race_id as number, w.pet_id as number]));
-
-  // The wallet's own entrant(s) per race, from the embedded inner-join rows.
-  type MineRow = { petId: number; finishPosition: number | null };
-  const mineByRace = new Map<number, MineRow[]>();
-  if (owner) {
-    for (const r of data ?? []) {
-      const entries = ((r as { race_entries?: { pet_id: number; finish_position: number | null }[] }).race_entries) ?? [];
-      mineByRace.set(r.race_id as number, entries.map((e) => ({ petId: e.pet_id, finishPosition: e.finish_position })));
-    }
-  }
 
   // One name lookup covering winners and the wallet's own horses.
   const namePetIds = [...new Set([...winnerByRace.values(), ...[...mineByRace.values()].flat().map((m) => m.petId)])];
