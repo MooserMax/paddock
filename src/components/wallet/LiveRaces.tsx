@@ -62,6 +62,10 @@ export default function LiveRaces({ wallet }: { wallet: string }) {
 
 function LiveRaceRow({ r }: { r: LiveRaceItem }) {
   const live = r.status === "live";
+  // The recap link is gated on Paddock actually having the resolved result. A race that
+  // resolved on-chain (phase 3) but is not yet ingested shows FINISHED but links to the
+  // Gigaverse race page, never to an empty Paddock recap.
+  const recapReady = r.status === "finished" && r.resolvedAt != null;
   const color = live ? "var(--glow)" : "var(--gold)";
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b hairline px-4 py-3 last:border-0">
@@ -78,17 +82,7 @@ function LiveRaceRow({ r }: { r: LiveRaceItem }) {
           </span>
         </div>
       </div>
-      {live ? (
-        <a
-          href={gigaRaceUrl(r.raceId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="type-micro shrink-0 uppercase tracking-wider transition-paddock hover:text-glow"
-          style={{ color: "var(--glow)" }}
-        >
-          Watch on Gigaverse ↗
-        </a>
-      ) : (
+      {recapReady ? (
         <Link
           href={`/race/${r.raceId}`}
           className="type-micro shrink-0 uppercase tracking-wider transition-paddock hover:text-glow"
@@ -96,6 +90,16 @@ function LiveRaceRow({ r }: { r: LiveRaceItem }) {
         >
           View recap
         </Link>
+      ) : (
+        <a
+          href={gigaRaceUrl(r.raceId)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="type-micro shrink-0 uppercase tracking-wider transition-paddock hover:text-glow"
+          style={{ color: live ? "var(--glow)" : "var(--gold)" }}
+        >
+          {live ? "Watch on Gigaverse ↗" : "View on Gigaverse ↗"}
+        </a>
       )}
     </div>
   );

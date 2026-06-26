@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { ok, badRequest, guard, preflight } from "@/lib/api/http";
 import { rateLimit } from "@/lib/api/rateLimit";
-import { findMyJoinedRaces } from "@/lib/raceTracker";
+import { findMyJoinedRaces, resolvedOnChain } from "@/lib/raceTracker";
 import { db } from "@/lib/db";
 import type { LiveRaceItem } from "@/lib/api/types";
 
@@ -56,11 +56,19 @@ export async function GET(req: NextRequest, props: { params: Promise<{ address: 
       }
     }
 
-    // 3. Build rows. State derives entirely from logs + resolved DB, nothing fabricated.
+    // 2b. For races NOT yet FINISHED via the DB, check on-chain resolution directly
+    //     (race-state phase 3) so the flip rides chain, not Paddock's ingest cron. Scoped
+    //     to the still-pending raceIds only, and cached; a DB-resolved race is skipped.
+    const pending = raceIds.filter((id) => resolved.get(id)?.finished !== true);
+    const onchainResolved = await resolvedOnChain(pending, head, windowBlocks);
+
+    // 3. Build rows. State derives entirely from logs + (DB resolved OR on-chain phase 3),
+    //    nothing fabricated. resolvedAt stays null until Paddock actually ingests the
+    //    result, which the client uses to keep the recap link honest.
     const rows: (LiveRaceItem & { block: number })[] = [];
     for (const [raceId, agg] of byRace) {
       const res = resolved.get(raceId);
-      const finished = res?.finished === true;
+      const finished = res?.finished === true || onchainResolved.has(raceId);
       rows.push({
         raceId,
         petIds: [...agg.petIds].sort((a, b) => a - b),
@@ -70,11 +78,11 @@ export async function GET(req: NextRequest, props: { params: Promise<{ address: 
         block: agg.block,
       });
     }
-    // Live first (newest join), then finished (newest resolved). Bounded list.
+    // Live first, then finished; within each, most recent join block first (a stable
+    // recency proxy that works whether or not resolvedAt has been ingested yet).
     rows.sort((a, b) => {
       if (a.status !== b.status) return a.status === "live" ? -1 : 1;
-      if (a.status === "live") return b.block - a.block;
-      return (b.resolvedAt ?? "").localeCompare(a.resolvedAt ?? "");
+      return b.block - a.block;
     });
     const races: LiveRaceItem[] = rows.slice(0, 12).map(({ block, ...rest }) => { void block; return rest; });
 

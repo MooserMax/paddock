@@ -81,3 +81,64 @@ export async function findMyJoinedRaces(wallet: string): Promise<{ races: Joined
     races: logs.map((l) => ({ raceId: Number(BigInt(l.topics[1])), petId: Number(BigInt(l.topics[2])), block: Number(BigInt(l.blockNumber)) })),
   };
 }
+
+// ---- Direct on-chain resolution check (so the flip rides chain, not the ingest cron) -
+// The PetRacingSystem emits a race-state event: topic1 = raceId, data word = phase.
+// phase 3 = RESOLVED on-chain. We use it to mark a still-pending race FINISHED the
+// moment it resolves, ahead of Paddock's resolved-race ingest. Verified on race 14890
+// (data 0x..0002 forming, then 0x..0003 resolved).
+const TOPIC_RACE_STATE = "0xa92c850bb09d5afa4a6230f4866fad10264c6fea20047156b39e3e24c5763ad4";
+
+// Resolution is terminal, so a race once seen at phase 3 is cached and never re-queried.
+// This is the brief cache that keeps the 20s poll from re-hitting the RPC for the same
+// race; the positive set is bounded so it cannot grow without limit.
+const phase3Cache = new Set<number>();
+
+async function stateLogs(lo: bigint, hi: bigint, idTopics: Hex[]): Promise<{ topics: string[]; data: string }[]> {
+  if (lo > hi) return [];
+  try {
+    return (await chainClient().request({
+      method: "eth_getLogs",
+      params: [{ address: PETRACING_CONTRACT as Hex, fromBlock: `0x${lo.toString(16)}`, toBlock: `0x${hi.toString(16)}`, topics: [TOPIC_RACE_STATE, idTopics] }],
+    })) as { topics: string[]; data: string }[];
+  } catch (err) {
+    if (hi - lo < 500n) throw err;
+    const mid = lo + (hi - lo) / 2n;
+    const [a, b] = await Promise.all([stateLogs(lo, mid, idTopics), stateLogs(mid + 1n, hi, idTopics)]);
+    return [...a, ...b];
+  }
+}
+
+// Which of `raceIds` are RESOLVED on-chain (race-state phase 3) within the bounded
+// window. ONE topic-filtered eth_getLogs over only the still-pending raceIds (the
+// resolved ones are already settled via the DB), with a terminal positive cache. A
+// failed RPC read just leaves them LIVE this cycle, never falsely FINISHED. Read-only.
+export async function resolvedOnChain(raceIds: number[], head: number, windowBlocks: number): Promise<Set<number>> {
+  const resolved = new Set<number>();
+  const toCheck: number[] = [];
+  for (const id of raceIds) {
+    if (phase3Cache.has(id)) resolved.add(id);
+    else toCheck.push(id);
+  }
+  if (toCheck.length === 0) return resolved;
+
+  const hi = BigInt(head);
+  const lo = hi - BigInt(windowBlocks) > 0n ? hi - BigInt(windowBlocks) : 0n;
+  const idTopics = toCheck.map((id) => (`0x${id.toString(16).padStart(64, "0")}`) as Hex);
+  let logs: { topics: string[]; data: string }[] = [];
+  try {
+    logs = await stateLogs(lo, hi, idTopics);
+  } catch {
+    return resolved; // leave pending races LIVE this cycle rather than guess
+  }
+  for (const l of logs) {
+    // The first data word is the phase; 3 = resolved.
+    const phase = Number(BigInt("0x" + (l.data.slice(2, 66) || "0")));
+    if (phase === 3) {
+      const id = Number(BigInt(l.topics[1]));
+      resolved.add(id);
+      if (phase3Cache.size < 10_000) phase3Cache.add(id);
+    }
+  }
+  return resolved;
+}
