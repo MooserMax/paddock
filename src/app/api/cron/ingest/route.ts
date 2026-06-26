@@ -7,6 +7,7 @@ import { scanPetTransfers } from "@/lib/ingest/petOwnership";
 import { materializeScoresFor } from "@/lib/ingest/scores";
 import { materializeStableSkill } from "@/lib/ingest/stableSkill";
 import { syncAccounts } from "@/lib/ingest/accounts";
+import { materializeRecords } from "@/lib/ingest/records";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,14 @@ const ACCOUNT_REFRESH_DAYS = 14; // re-check a resolved address this infrequentl
 const RACE_DEADLINE_MS = 26_000; // wall-clock budget for the race-API polling
 const SOFT_DEADLINE_MS = 34_000; // stop starting new pet/score work past this
 const ACCOUNT_DEADLINE_MS = 40_000; // accounts run in whatever budget remains
+// Records board: recompute on THIS reliable fast cron, not only the GitHub Action
+// (whose schedule GitHub frequently delays/skips for hours, which stranded the board
+// ~37h stale while the underlying tables stayed fresh). Bounded so it can never push
+// the function past its cap: it only STARTS early in the cycle and at most every
+// RECORDS_MIN_INTERVAL_MS. DB-only (no RPC), so no quota risk.
+const RECORDS_MIN_INTERVAL_MS = 12 * 60_000; // refresh records at most this often
+const RECORDS_START_BY_MS = 16_000; // only begin the records recompute this early in the cycle
+const RECORDS_LAST_RUN_KEY = "records_last_run";
 const LOCK_KEY = "ingest_lock";
 const LOCK_TTL_MS = 90_000; // a crashed run self-releases after this
 
@@ -97,6 +106,24 @@ export async function GET(req: NextRequest) {
       steps.resolvedRpc = await scanResolvedRacesRpc({ tempBudget: RPC_TEMP_BUDGET, deadline: t0 + RPC_DEADLINE_MS });
     } catch (e) {
       steps.resolvedRpcError = msg(e);
+    }
+
+    // 0c. Records board recompute on the reliable cadence. Placed right after the
+    //     resolved scan so it reads the freshest finish times. Gated by a min-interval
+    //     and an early-start budget check, so with the ~15-min external cron the board
+    //     refreshes within ~15 min regardless of the GitHub Action, and a long cycle
+    //     simply defers it to the next call rather than risking the function cap.
+    try {
+      const lastRec = await getSyncState<{ at: number }>(RECORDS_LAST_RUN_KEY);
+      const due = !lastRec || t0 - (lastRec.at ?? 0) >= RECORDS_MIN_INTERVAL_MS;
+      if (due && Date.now() < t0 + RECORDS_START_BY_MS) {
+        steps.records = await materializeRecords();
+        await setSyncState(RECORDS_LAST_RUN_KEY, { at: Date.now() });
+      } else {
+        steps.recordsSkipped = due ? "deadline" : "interval";
+      }
+    } catch (e) {
+      steps.recordsError = msg(e);
     }
 
     // 0b. Keep pet ownership current from on-chain Transfer logs, so a transferred
