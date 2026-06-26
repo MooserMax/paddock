@@ -70,6 +70,11 @@ export interface GigaPet {
   name: string;
   imgUrl: string;
   hatched: boolean;
+  // On-chain racing registration. A Gigling can be hatched (metadata) yet NOT
+  // registered for racing on-chain; joinRace reverts PetNotHatched (0x8d28823d) for
+  // these, so they are not actually raceable. This is the authoritative racing-eligibility
+  // gate that canPetRace does NOT check.
+  isRegisteredOnChain?: boolean;
   gender: string;
   rarity: number;
   rarityName: string;

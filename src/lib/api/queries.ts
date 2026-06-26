@@ -1216,7 +1216,32 @@ export async function getRecords(trackParam: number | null, mode: RecordMode, wi
 // ---- Race Finder, live lobbies + your edge (read-only) ----------------------
 import type { LobbyResponse, LobbyRow, LobbyEntrant, LobbyEdge, RaceTrackingDTO, RaceTrackEntrant, DevelopResponse, DevelopCandidate, DevelopRace, PetEntryCheck } from "./types";
 import { getOpenLobbies, POLL_MS, type OpenLobby } from "../lobbies";
-import { fetchRace } from "../gigaverse";
+import { fetchRace, fetchPetsBatch, PETS_BATCH_SIZE } from "../gigaverse";
+
+// Per-pet on-chain racing-registration cache. The authoritative signal is
+// racing/pets' isRegisteredOnChain: a Gigling can be hatched (metadata) yet NOT
+// registered for racing on-chain, in which case joinRace reverts PetNotHatched
+// (0x8d28823d) and canPetRace still (wrongly) returns true. Batched 25/call and cached
+// in-process, so even a 300+ horse wallet costs ~12 REST calls once per TTL per warm
+// instance, never per request and never 222 one-by-one joinRace simulations.
+const REG_TTL_MS = 10 * 60_000;
+const regCache = new Map<number, { reg: boolean; at: number }>();
+async function registrationFor(petIds: number[]): Promise<Map<number, boolean>> {
+  const now = Date.now();
+  const need = petIds.filter((id) => { const c = regCache.get(id); return !c || now - c.at >= REG_TTL_MS; });
+  for (let i = 0; i < need.length; i += PETS_BATCH_SIZE) {
+    const batch = need.slice(i, i + PETS_BATCH_SIZE);
+    try {
+      const pets = await fetchPetsBatch(batch);
+      const seen = new Set<number>();
+      for (const p of pets) { regCache.set(p.id, { reg: !!p.isRegisteredOnChain, at: now }); seen.add(p.id); }
+      for (const id of batch) if (!seen.has(id)) regCache.set(id, { reg: false, at: now }); // not in racing API => not raceable
+    } catch { /* transient: leave unknown, getDevelop falls open (sim backstops at entry) */ }
+  }
+  const out = new Map<number, boolean>();
+  for (const id of petIds) { const c = regCache.get(id); if (c) out.set(id, c.reg); }
+  return out;
+}
 import { petRaceStatus } from "../raceLimit";
 
 const LOBBY_NOTE =
@@ -1513,7 +1538,13 @@ export async function getDevelop(walletParam: string | null): Promise<DevelopRes
   // unresolved race (snapshot/DB) OR contract-locked; resting = cannot race and not
   // racing; otherwise available.
   const status = await petRaceStatus(ids, wallet);
+  // Authoritative racing-registration (isRegisteredOnChain). Unknown falls open to
+  // registered so a transient REST failure never hides a raceable horse; the per-call
+  // value-0 simulation is the final backstop at entry.
+  const regMap = await registrationFor(ids);
   const statusOf = (id: number): DevelopCandidate["status"] => {
+    const registered = regMap.has(id) ? regMap.get(id)! : true;
+    if (!registered) return "not_registered"; // hatched but not registered for racing => cannot race
     const s = status.get(id);
     const rid = racingByPet[id];
     const inRace = (rid != null && !resolvedRaceIds.has(rid)) || s?.locked === true;
@@ -1550,6 +1581,11 @@ export async function getPetEntryCheck(walletParam: string, petId: number, raceI
   const petName = (pet?.name as string) ?? null;
   const owned = !!pet && ((pet.owner_address as string) ?? "").toLowerCase() === wallet;
   if (!owned) return { ...empty, petName, reason: `You do not own #${petId}.` };
+
+  // Racing registration: a hatched horse that is not registered for racing on-chain
+  // cannot enter (joinRace reverts PetNotHatched). Surface it before the sim gate.
+  const reg = await registrationFor([petId]);
+  if (reg.get(petId) === false) return { ...empty, petName, owned: true, reason: `#${petId} is not registered for racing on Gigaverse, so it cannot enter a race yet.` };
 
   const { lobbies: open, racingByPet } = await getOpenLobbies();
   const snapshotRaceIds = [...new Set([...open.map((l) => l.raceId), ...Object.values(racingByPet)])];

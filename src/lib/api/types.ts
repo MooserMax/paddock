@@ -400,7 +400,8 @@ export interface DevelopCandidate {
   revealPct: number; // 0..1 overall reveal progress (less is more to gain)
   reveals: { start: number; speed: number; stamina: number; finish: number }; // per-stat reveal counts
   racesRun: number;
-  status: "available" | "racing" | "resting"; // reuses the shipped eligibility signal
+  // "not_registered": hatched but not registered for racing on-chain (cannot race).
+  status: "available" | "racing" | "resting" | "not_registered";
 }
 
 export interface DevelopRace {

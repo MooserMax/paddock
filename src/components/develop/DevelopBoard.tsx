@@ -6,6 +6,7 @@ import { useAccount, usePublicClient, useCapabilities, useSendCalls, useCallsSta
 import type { DevelopResponse, DevelopCandidate, DevelopRace, WalletSummary } from "@/lib/api/types";
 import { ConnectBar } from "@/components/racefinder/EntryControls";
 import { shortAddress } from "@/lib/format";
+import { rarityDisplay } from "@/lib/display";
 import {
   ABSTRACT_CHAIN_ID,
   PETRACING_CONTRACT,
@@ -53,6 +54,31 @@ function setIdsFor(set: string, summary: WalletSummary | null): number[] {
 function pctLabel(p: number): string {
   return `${Math.round((p ?? 0) * 100)}% revealed`;
 }
+
+// Categorization (client-side, over the already-loaded develop payload). Only fields
+// that exist on a candidate: status, rarity tier, revealPct, racesRun.
+const STATUS_FILTERS: { key: DevelopCandidate["status"]; label: string }[] = [
+  { key: "available", label: "Ready" },
+  { key: "not_registered", label: "Not registered" },
+  { key: "resting", label: "Resting" },
+  { key: "racing", label: "Racing" },
+];
+const REVEAL_BUCKETS = [
+  { key: "0", label: "0%", test: (p: number) => p <= 0.001 },
+  { key: "1-25", label: "1-25%", test: (p: number) => p > 0.001 && p <= 0.25 },
+  { key: "26-50", label: "26-50%", test: (p: number) => p > 0.25 && p <= 0.5 },
+  { key: "51+", label: "51%+", test: (p: number) => p > 0.5 },
+] as const;
+const RACES_BUCKETS = [
+  { key: "0", label: "Never raced", test: (n: number) => n === 0 },
+  { key: "1-3", label: "1-3 races", test: (n: number) => n >= 1 && n <= 3 },
+  { key: "4+", label: "4+ races", test: (n: number) => n >= 4 },
+] as const;
+const SORTS: { key: "reveal" | "rarity" | "races"; label: string }[] = [
+  { key: "reveal", label: "Least revealed" },
+  { key: "rarity", label: "Rarity" },
+  { key: "races", label: "Fewest races" },
+];
 
 // Spread selected horses across the open free slots (most-open race first), so they
 // are not all stacked into one race. Returns what fit and what did not.
@@ -113,6 +139,15 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
   // sessionStorage so the intent survives the connect round-trip even if the URL is
   // lost. Resolution is deferred until BOTH a wallet is connected AND develop data has
   // loaded, so we never flash an empty list and the eligibility is re-checked live.
+  // Categorization filters (default = ready-only, least-revealed-first).
+  const [statusFilter, setStatusFilter] = useState<DevelopCandidate["status"]>("available");
+  const [rarityFilter, setRarityFilter] = useState<Set<number>>(new Set());
+  const [revealBucket, setRevealBucket] = useState<string | null>(null);
+  const [racesBucket, setRacesBucket] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<"reveal" | "rarity" | "races">("reveal");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 40;
+
   const [pickSet, setPickSet] = useState<string>(initialPickSet);
   const [pickStage, setPickStage] = useState<"none" | "resolving" | "staged" | "empty">(initialPickSet ? "resolving" : "none");
   const [stageMsg, setStageMsg] = useState<string | null>(null);
@@ -229,8 +264,28 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
 
   const candidates = data?.candidates ?? [];
   const freeRaces = data?.freeRaces ?? [];
-  const available = candidates.filter((c) => c.status === "available");
+  const available = candidates.filter((c) => c.status === "available"); // READY = registered + eligible
   const byId = new Map(candidates.map((c) => [c.petId, c]));
+
+  // Per-status counts (over the full pool) for the status segment.
+  const statusCounts: Record<string, number> = { available: 0, not_registered: 0, resting: 0, racing: 0 };
+  for (const c of candidates) statusCounts[c.status] = (statusCounts[c.status] ?? 0) + 1;
+  // Current status slice, the population the other filters refine.
+  const inStatus = candidates.filter((c) => c.status === statusFilter);
+  const rarityTiers = [...new Set(inStatus.map((c) => c.rarity))].sort((a, b) => b - a);
+  const rarityCount = (t: number) => inStatus.filter((c) => c.rarity === t).length;
+  // Filtered + sorted (client-side, over already-loaded data).
+  const visible = inStatus
+    .filter((c) => rarityFilter.size === 0 || rarityFilter.has(c.rarity))
+    .filter((c) => !revealBucket || (REVEAL_BUCKETS.find((b) => b.key === revealBucket)?.test(c.revealPct) ?? true))
+    .filter((c) => !racesBucket || (RACES_BUCKETS.find((b) => b.key === racesBucket)?.test(c.racesRun) ?? true))
+    .sort((a, b) =>
+      sortBy === "rarity" ? b.rarity - a.rarity || a.revealPct - b.revealPct
+      : sortBy === "races" ? a.racesRun - b.racesRun || a.revealPct - b.revealPct
+      : a.revealPct - b.revealPct || b.rarity - a.rarity // reveal (default): least-revealed, then rarity desc
+    );
+  const paged = visible.slice(0, page * PAGE_SIZE); // paginate so a 332-horse stable stays snappy
+  const anyFilter = rarityFilter.size > 0 || revealBucket != null || racesBucket != null;
 
   // LIVE assignment, shown as the user selects (not hidden until review). This is the
   // EXACT placement the batch will use: selected horses are assigned best-development-
@@ -250,6 +305,17 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
     });
   }
 
+  // Filter handlers (reset pagination on any change).
+  function setStatusSeg(s: DevelopCandidate["status"]) { setStatusFilter(s); setPage(1); }
+  function toggleRarity(t: number) { setRarityFilter((prev) => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; }); setPage(1); }
+  function clearFilters() { setRarityFilter(new Set()); setRevealBucket(null); setRacesBucket(null); setPage(1); }
+  // Filter then stage: select every READY horse currently shown, capped at the field size.
+  function selectAllShown() {
+    const ids = visible.filter((c) => c.status === "available").map((c) => c.petId).slice(0, selectCap);
+    setSelected(new Set(ids));
+    if (mode === "create") setFieldSize(Math.min(CREATE_FIELD_MAX, Math.max(CREATE_FIELD_MIN, ids.length || CREATE_FIELD_MIN)));
+  }
+
   // Manual horse-ID add: validate ownership + eligibility against the wallet's own
   // candidate set (which is exactly its hatched horses) before adding to the batch.
   // Returns an error message or null. The per-call simulation in review() is the final
@@ -257,6 +323,7 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
   const addById = useCallback((petId: number): string | null => {
     const c = candidates.find((x) => x.petId === petId);
     if (!c) return `You do not own #${petId}, or it is not race-ready.`;
+    if (c.status === "not_registered") return `#${petId} is not registered for racing on Gigaverse yet.`;
     if (c.status !== "available") return `#${petId} is ${c.status === "racing" ? "racing now" : "resting (daily limit)"}.`;
     if (selected.has(petId)) return `#${petId} is already selected.`;
     if (selected.size >= selectCap) return `You can select at most ${selectCap}.`;
@@ -559,19 +626,79 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
               <p className="type-body mt-1 text-ink-soft">If you just received one, ownership can take a moment to index.</p>
             </div>
           ) : (
-            <div ref={stagedRef} className="grid gap-2">
-              {candidates.map((c) => (
-                <DevelopRow
-                  key={c.petId}
-                  c={c}
-                  selected={selected.has(c.petId)}
-                  disabled={c.status !== "available" || (!selected.has(c.petId) && selected.size >= selectCap)}
-                  assignedRace={mode === "fill" && selected.has(c.petId) ? raceForPet.get(c.petId) ?? null : undefined}
-                  noSlot={mode === "fill" && selected.has(c.petId) && unplacedSet.has(c.petId)}
-                  onToggle={() => toggle(c.petId)}
-                />
-              ))}
-            </div>
+            <>
+              {/* FILTER BAR: slice the stable instead of scrolling 222 rows. One control
+                  region: status segment, rarity, reveal, races, sort, active chips. */}
+              <div className="mb-3 flex flex-col gap-2.5 rounded-md border p-3" style={{ borderColor: "var(--line-strong)", background: "var(--paper-raised)" }}>
+                <FilterRow label="Status">
+                  {STATUS_FILTERS.map((s) => (
+                    <Pill key={s.key} active={statusFilter === s.key} onClick={() => setStatusSeg(s.key)} label={`${s.label} ${statusCounts[s.key] ?? 0}`} />
+                  ))}
+                </FilterRow>
+                {rarityTiers.length > 0 && (
+                  <FilterRow label="Rarity">
+                    {rarityTiers.map((t) => {
+                      const r = rarityDisplay(t);
+                      return <Pill key={t} active={rarityFilter.has(t)} onClick={() => toggleRarity(t)} label={`${r.name} ${rarityCount(t)}`} color={r.color} />;
+                    })}
+                  </FilterRow>
+                )}
+                <FilterRow label="Reveal">
+                  {REVEAL_BUCKETS.map((b) => (
+                    <Pill key={b.key} active={revealBucket === b.key} onClick={() => { setRevealBucket(revealBucket === b.key ? null : b.key); setPage(1); }} label={b.label} />
+                  ))}
+                </FilterRow>
+                <FilterRow label="Races">
+                  {RACES_BUCKETS.map((b) => (
+                    <Pill key={b.key} active={racesBucket === b.key} onClick={() => { setRacesBucket(racesBucket === b.key ? null : b.key); setPage(1); }} label={b.label} />
+                  ))}
+                </FilterRow>
+                <FilterRow label="Sort">
+                  {SORTS.map((s) => (
+                    <Pill key={s.key} active={sortBy === s.key} onClick={() => setSortBy(s.key)} label={s.label} />
+                  ))}
+                </FilterRow>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span aria-live="polite" className="type-micro normal-case text-ink-faint">
+                    {visible.length} {STATUS_FILTERS.find((s) => s.key === statusFilter)?.label.toLowerCase()} horse{visible.length === 1 ? "" : "s"} shown{anyFilter ? ", filtered" : ""}.
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {anyFilter && <button onClick={clearFilters} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Clear filters</button>}
+                    {statusFilter === "available" && visible.length > 0 && (
+                      <button onClick={selectAllShown} className="type-micro uppercase tracking-wider rounded-md border px-3 py-1.5 text-ink transition-paddock hover:border-glow" style={{ borderColor: "var(--line-strong)" }}>
+                        Select all shown ({Math.min(visible.length, selectCap)})
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {visible.length === 0 ? (
+                <div className="panel p-8 text-center">
+                  <p className="type-card-title text-ink">No horses match these filters</p>
+                  <p className="type-body mt-1 text-ink-soft">Loosen a filter to see more of your stable.</p>
+                </div>
+              ) : (
+                <div ref={stagedRef} className="grid gap-2">
+                  {paged.map((c) => (
+                    <DevelopRow
+                      key={c.petId}
+                      c={c}
+                      selected={selected.has(c.petId)}
+                      disabled={c.status !== "available" || (!selected.has(c.petId) && selected.size >= selectCap)}
+                      assignedRace={mode === "fill" && selected.has(c.petId) ? raceForPet.get(c.petId) ?? null : undefined}
+                      noSlot={mode === "fill" && selected.has(c.petId) && unplacedSet.has(c.petId)}
+                      onToggle={() => toggle(c.petId)}
+                    />
+                  ))}
+                  {visible.length > paged.length && (
+                    <button onClick={() => setPage((p) => p + 1)} className="type-micro uppercase tracking-wider mt-1 rounded-md border px-3 py-2 text-ink-faint transition-paddock hover:text-ink" style={{ borderColor: "var(--line-strong)" }}>
+                      Show {Math.min(PAGE_SIZE, visible.length - paged.length)} more ({visible.length - paged.length} left)
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
           {/* Manual horse-ID add, alongside the ranked picker. */}
@@ -674,8 +801,34 @@ function DevelopManualAdd({ onAdd }: { onAdd: (petId: number) => string | null }
   );
 }
 
+function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="type-micro uppercase tracking-wider text-ink-faint" style={{ minWidth: 52 }}>{label}</span>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+    </div>
+  );
+}
+
+// Pill toggle, consistent with the Records page filters. Rarity color is never the
+// only signal, the label always carries the tier name.
+function Pill({ active, onClick, label, color }: { active: boolean; onClick: () => void; label: string; color?: string }) {
+  const c = color ?? "var(--glow)";
+  return (
+    <button onClick={onClick} aria-pressed={active} className="type-micro rounded-full border px-2.5 py-1 transition-paddock"
+      style={{ borderColor: active ? c : "var(--line-strong)", color: active ? c : "var(--ink-faint)", background: active ? `color-mix(in srgb, ${c} 14%, transparent)` : "transparent" }}>
+      {color && <span className="mr-1 inline-block h-2 w-2 rounded-full align-middle" style={{ background: color }} aria-hidden />}
+      {label}
+    </button>
+  );
+}
+
 function DevelopRow({ c, selected, disabled, assignedRace, noSlot, onToggle }: { c: DevelopCandidate; selected: boolean; disabled: boolean; assignedRace?: number | null; noSlot?: boolean; onToggle: () => void }) {
-  const statusLabel = c.status === "available" ? null : c.status === "racing" ? "racing now" : "resting (daily limit)";
+  const statusLabel =
+    c.status === "available" ? null
+    : c.status === "racing" ? "racing now"
+    : c.status === "not_registered" ? "not registered"
+    : "resting (daily limit)";
   return (
     <button
       onClick={onToggle}
@@ -691,8 +844,9 @@ function DevelopRow({ c, selected, disabled, assignedRace, noSlot, onToggle }: {
         <div>
           <Link href={`/pet/${c.petId}`} onClick={(e) => e.stopPropagation()} className="type-data text-ink transition-paddock hover:text-glow">{c.name ?? `#${c.petId}`}</Link>
           <p className="type-micro normal-case text-ink-faint">
-            {pctLabel(c.revealPct)}, {REVEAL_STATS.map((s) => `${s} ${c.reveals[s]}`).join(", ")}, {c.racesRun} races run
+            {rarityDisplay(c.rarity).name}, {pctLabel(c.revealPct)}, {c.racesRun} races run
           </p>
+          {c.status === "not_registered" && <p className="type-micro normal-case" style={{ color: "var(--gold)" }}>Register on Gigaverse to race this horse.</p>}
         </div>
       </div>
       <div className="flex items-center gap-2.5">
