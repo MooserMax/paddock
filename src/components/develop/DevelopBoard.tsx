@@ -56,7 +56,7 @@ function assignToSlots(order: number[], freeRaces: DevelopRace[]): { placed: Ass
   return { placed, unplaced };
 }
 
-export default function DevelopBoard({ initialWallet }: { initialWallet: string }) {
+export default function DevelopBoard({ initialWallet, initialPick = [], initialPickLabel = "" }: { initialWallet: string; initialPick?: number[]; initialPickLabel?: string }) {
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { sendTransactionAsync } = useSendTransaction();
@@ -94,6 +94,13 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
   // In create mode the user can pick at most fieldSize horses; in fill mode the batch cap.
   const selectCap = mode === "create" ? fieldSize : DEVELOP_MAX_BATCH;
 
+  // One-click "Develop these" from the Stable report: pre-select the ELIGIBLE members
+  // of the passed set, best-first (the order given), capped at the field size, and
+  // note what was skipped. Reuses the normal selection state; the user still reviews
+  // and signs. Runs once, after candidates load.
+  const [pickNote, setPickNote] = useState<string | null>(null);
+  const pickApplied = useRef(false);
+
   const load = useCallback(async () => {
     if (!wallet) { setData(null); return; }
     try {
@@ -111,6 +118,24 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
     const poll = setInterval(() => { if (phase === "select") load(); }, 6000);
     return () => clearInterval(poll);
   }, [load, phase]);
+
+  // Apply the pre-selected "Develop these" set once candidates are loaded.
+  useEffect(() => {
+    if (pickApplied.current || initialPick.length === 0 || !data) return;
+    pickApplied.current = true;
+    const byIdLocal = new Map(data.candidates.map((c) => [c.petId, c]));
+    const requested = initialPick.filter((id) => byIdLocal.has(id));
+    const eligible = requested.filter((id) => byIdLocal.get(id)!.status === "available");
+    const chosen = eligible.slice(0, selectCap);
+    setSelected(new Set(chosen));
+    const label = initialPickLabel || "your set";
+    if (chosen.length === 0) {
+      setPickNote(`None of ${label} can be entered right now (resting, racing, or not in this wallet).`);
+    } else {
+      const skipped = requested.length - chosen.length;
+      setPickNote(`Pre-selected ${chosen.length} of ${requested.length} from ${label}${skipped > 0 ? `, ${skipped} ${skipped === 1 ? "is" : "are"} resting, racing, or over the field cap` : ""}.`);
+    }
+  }, [data, initialPick, initialPickLabel, selectCap]);
 
   // Create pre-check: simulate a createRace and decode the result, so the Create
   // button is disabled with the ACCURATE reason (not registered, or an unresolved
@@ -357,6 +382,11 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
       </div>
 
       {error && phase !== "error" && <p className="type-micro mb-3 normal-case" style={{ color: "var(--gold)" }}>{error}</p>}
+
+      {/* Pre-selected set from the Stable report's "Develop these" buttons. */}
+      {phase === "select" && pickNote && (
+        <p className="type-micro mb-3 normal-case rounded-md border px-3 py-2" style={{ borderColor: "var(--line-strong)", color: "var(--ink-soft)" }}>{pickNote}</p>
+      )}
 
       {/* Mode: fill open free races, or create your own and pack it with your horses. */}
       {phase === "select" && (

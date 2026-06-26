@@ -9,6 +9,7 @@ import Panel from "@/components/ui/Panel";
 import WalletSearch from "@/components/WalletSearch";
 import { ConnectBar } from "@/components/racefinder/EntryControls";
 import RaceTracker from "@/components/stable/RaceTracker";
+import StableReport from "@/components/stable/StableReport";
 import { formatEth, formatInt, ordinal, ownerDisplay, timeAgo, asOfLabel } from "@/lib/format";
 
 // Logged-in stable home. With a wallet connected (AGW or injected) it loads that
@@ -124,6 +125,9 @@ export default function StableHome({ initialAddress }: { initialAddress: string 
               <span className="type-micro normal-case text-ink-faint">Stable data as of {asOfLabel(summary.asOf)}, refreshes automatically</span>
             )}
           </header>
+
+          {/* Stable Intelligence Report: standouts, why, and one-click Develop. */}
+          <StableReport summary={summary} />
 
           {/* Follow-your-entry tracker (Piece 3) */}
           <RaceTracker wallet={wallet} />
