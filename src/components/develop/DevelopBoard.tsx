@@ -151,6 +151,9 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
   const [pickSet, setPickSet] = useState<string>(initialPickSet);
   const [pickStage, setPickStage] = useState<"none" | "resolving" | "staged" | "empty">(initialPickSet ? "resolving" : "none");
   const [stageMsg, setStageMsg] = useState<string | null>(null);
+  // The wallet's named sets, loaded once on connect, used ONLY to show eligible counts
+  // on the on-page set-pick buttons. Resolution itself re-fetches live inside stagePick.
+  const [pickSummary, setPickSummary] = useState<WalletSummary | null>(null);
   const [fillAlt, setFillAlt] = useState<{ slots: number; canFill: number } | null>(null);
   const pickApplied = useRef(false);
   const stagedRef = useRef<HTMLDivElement | null>(null);
@@ -183,49 +186,83 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
     return () => clearInterval(poll);
   }, [load, phase]);
 
-  // Resolve and stage the pick set once: needs a connected wallet AND develop data.
-  // Fetches the wallet's named sets, re-checks eligibility live, stages the eligible
-  // members best-first into a create-your-own-race (field size = eligible count, cap
-  // 8). Handles every state: empty set -> explanatory empty state; otherwise stage and
-  // (if open free slots fit) offer a fill-now alternative.
+  // Load the wallet's named sets for the set-pick button counts (best-first membership).
+  useEffect(() => {
+    if (!connected || !address) { setPickSummary(null); return; }
+    let alive = true;
+    fetch(`/api/v1/wallet/${address}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => { if (alive) setPickSummary(s as WalletSummary | null); })
+      .catch(() => { /* counts simply will not show */ });
+    return () => { alive = false; };
+  }, [connected, address]);
+
+  // The SINGLE pick-resolution path: resolve a SET NAME against the connected wallet,
+  // re-check eligibility LIVE against the develop payload (registration-aware: only
+  // status==="available" horses stage), and stage the eligible members best-first into
+  // a create-your-own-race (field size = eligible count, cap 8). Handles every state:
+  // empty set -> explanatory empty state; otherwise stage and (if open free slots fit)
+  // offer a fill-now alternative. Used by BOTH the ?pick= arrival effect and the
+  // on-page set-pick buttons, so there is exactly one implementation.
+  const stagePick = useCallback(async (set: string) => {
+    if (!SET_LABELS[set] || !connected || !address || !data) return;
+    const label = SET_LABELS[set];
+    setPickStage("resolving");
+    let summary: WalletSummary | null = null;
+    try {
+      const res = await fetch(`/api/v1/wallet/${address}`, { cache: "no-store" });
+      summary = res.ok ? ((await res.json()) as WalletSummary) : null;
+    } catch { /* fall through to empty */ }
+    const ids = setIdsFor(set, summary);
+    const byIdLocal = new Map(data.candidates.map((c) => [c.petId, c]));
+    const owned = ids.filter((id) => byIdLocal.has(id));
+    const eligible = owned.filter((id) => byIdLocal.get(id)!.status === "available");
+    if (eligible.length === 0) {
+      setPickStage("empty");
+      setStageMsg(`${label} are all racing or resting right now. They will be available after their current races resolve.`);
+      return;
+    }
+    const chosen = eligible.slice(0, CREATE_FIELD_MAX);
+    setMode("create");
+    setFieldSize(chosen.length);
+    setSelected(new Set(chosen));
+    const dropped = owned.length - chosen.length;
+    const droppedNames = owned.filter((id) => !chosen.includes(id)).slice(0, 2).map((id) => byIdLocal.get(id)?.name ?? `#${id}`).join(", ");
+    setStageMsg(
+      dropped > 0
+        ? `Staged ${chosen.length} of ${owned.length} ${label} for a ${chosen.length}-horse race. ${droppedNames}${owned.length - chosen.length > 2 ? " and others" : ""} resting, racing, or over the cap.`
+        : `Staged ${chosen.length} ${label} for a ${chosen.length}-horse race.`
+    );
+    setPickStage("staged");
+    const slots = data.openFreeSlots ?? 0;
+    setFillAlt(slots > 0 ? { slots, canFill: Math.min(slots, chosen.length) } : null);
+    setTimeout(() => stagedRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+  }, [connected, address, data]);
+
+  // Arrival via ?pick=<set> (or restored from storage): apply ONCE when connect + data
+  // are both ready, reusing the same stagePick path the buttons use. No empty-list flash.
   useEffect(() => {
     if (pickApplied.current || !pickSet || !SET_LABELS[pickSet]) return;
-    if (!connected || !address || !data) return; // wait for connect + data (no empty-list flash)
+    if (!connected || !address || !data) return;
     pickApplied.current = true;
-    const label = SET_LABELS[pickSet];
-    (async () => {
-      setPickStage("resolving");
-      let summary: WalletSummary | null = null;
-      try {
-        const res = await fetch(`/api/v1/wallet/${address}`, { cache: "no-store" });
-        summary = res.ok ? ((await res.json()) as WalletSummary) : null;
-      } catch { /* fall through to empty */ }
-      const ids = setIdsFor(pickSet, summary);
-      const byIdLocal = new Map(data.candidates.map((c) => [c.petId, c]));
-      const owned = ids.filter((id) => byIdLocal.has(id));
-      const eligible = owned.filter((id) => byIdLocal.get(id)!.status === "available");
-      if (eligible.length === 0) {
-        setPickStage("empty");
-        setStageMsg(`${label} are all racing or resting right now. They will be available after their current races resolve.`);
-        return;
-      }
-      const chosen = eligible.slice(0, CREATE_FIELD_MAX);
-      setMode("create");
-      setFieldSize(chosen.length);
-      setSelected(new Set(chosen));
-      const dropped = owned.length - chosen.length;
-      const droppedNames = owned.filter((id) => !chosen.includes(id)).slice(0, 2).map((id) => byIdLocal.get(id)?.name ?? `#${id}`).join(", ");
-      setStageMsg(
-        dropped > 0
-          ? `Staged ${chosen.length} of ${owned.length} ${label} for a ${chosen.length}-horse race. ${droppedNames}${owned.length - chosen.length > 2 ? " and others" : ""} resting, racing, or over the cap.`
-          : `Staged ${chosen.length} ${label} for a ${chosen.length}-horse race.`
-      );
-      setPickStage("staged");
-      const slots = data.openFreeSlots ?? 0;
-      setFillAlt(slots > 0 ? { slots, canFill: Math.min(slots, chosen.length) } : null);
-      setTimeout(() => stagedRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
-    })();
-  }, [pickSet, connected, address, data]);
+    stagePick(pickSet);
+  }, [pickSet, connected, address, data, stagePick]);
+
+  // On-page set-pick buttons: stage IN PLACE, no navigation away. Mirror the choice into
+  // the URL (?pick=<set>) via replaceState so the state is shareable/refreshable while the
+  // SAME stagePick path runs. pickApplied stays true so the arrival effect never double-fires.
+  const applyPick = useCallback((set: string) => {
+    if (!SET_LABELS[set]) return;
+    pickApplied.current = true;
+    setPickSet(set);
+    try { sessionStorage.setItem(PICK_STORAGE_KEY, set); } catch { /* storage blocked */ }
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("pick", set);
+      window.history.replaceState(null, "", url.toString());
+    } catch { /* URL mirror is best-effort */ }
+    stagePick(set);
+  }, [stagePick]);
 
   // Create pre-check: simulate a createRace and decode the result, so the Create
   // button is disabled with the ACCURATE reason (not registered, or an unresolved
@@ -266,6 +303,14 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
   const freeRaces = data?.freeRaces ?? [];
   const available = candidates.filter((c) => c.status === "available"); // READY = registered + eligible
   const byId = new Map(candidates.map((c) => [c.petId, c]));
+  // Eligible count for a set-pick button: set members that are READY (registered +
+  // available) right now, the same registration-aware gate stagePick uses.
+  const eligibleCount = (set: string) => setIdsFor(set, pickSummary).filter((id) => byId.get(id)?.status === "available").length;
+  const PICK_BUTTONS: { set: string; label: string }[] = [
+    { set: "areteam", label: "Develop my A-Team" },
+    { set: "hiddengems", label: "Develop my Hidden Gems" },
+    { set: "nextreveals", label: "Develop next reveals" },
+  ];
 
   // Per-status counts (over the full pool) for the status segment.
   const statusCounts: Record<string, number> = { available: 0, not_registered: 0, resting: 0, racing: 0 };
@@ -533,6 +578,29 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
       </div>
 
       {error && phase !== "error" && <p className="type-micro mb-3 normal-case" style={{ color: "var(--gold)" }}>{error}</p>}
+
+      {/* One-click set picks, native to Develop: stage a named set IN PLACE (no trip to
+          Stable). Same stagePick path as ?pick=; counts are registration-aware. */}
+      {phase === "select" && connected && data && pickStage !== "resolving" && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="type-micro uppercase tracking-wider text-ink-faint">Quick sets:</span>
+          {PICK_BUTTONS.map(({ set, label }) => {
+            const n = eligibleCount(set);
+            const active = pickSet === set && pickStage === "staged";
+            return (
+              <button
+                key={set}
+                onClick={() => applyPick(set)}
+                aria-pressed={active}
+                className="type-micro uppercase tracking-wider rounded-md border px-3 py-1.5 transition-paddock"
+                style={{ borderColor: active ? "var(--glow)" : "var(--line-strong)", color: active ? "var(--glow)" : "var(--ink-soft)", background: active ? "color-mix(in srgb, var(--glow) 12%, transparent)" : "transparent" }}
+              >
+                {label}{pickSummary ? ` (${n})` : ""}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* ONE consistent status region (aria-live): the staged-set summary and the
           create gate reason, updating in place as state changes. The Create CTA points
