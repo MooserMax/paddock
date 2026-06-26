@@ -13,13 +13,11 @@ export const dynamic = "force-dynamic";
 export default async function DevelopPage(props: { searchParams: Promise<{ wallet?: string; pick?: string; from?: string }> }) {
   const searchParams = await props.searchParams;
   const wallet = searchParams.wallet && /^0x[0-9a-fA-F]{40}$/.test(searchParams.wallet) ? searchParams.wallet : "";
-  // Optional pre-selected set from the Stable report's "Develop these" buttons.
-  const initialPick = (searchParams.pick ?? "")
-    .split(",")
-    .map((s) => Number(s))
-    .filter((n) => Number.isInteger(n) && n > 0)
-    .slice(0, 50);
-  const initialPickLabel = (searchParams.from ?? "").slice(0, 40);
+  // Optional set to stage from the Stable report's "Develop these" buttons. A set
+  // NAME (resolved fresh against the connected wallet), so it survives connect and a
+  // refresh re-applies it.
+  const pickRaw = (searchParams.pick ?? "").toLowerCase();
+  const initialPickSet = (["areteam", "hiddengems", "nextreveals"] as const).includes(pickRaw as never) ? pickRaw : "";
 
   return (
     <div className="mx-auto max-w-page px-4 py-8 md:px-6 md:py-12">
@@ -33,7 +31,7 @@ export default async function DevelopPage(props: { searchParams: Promise<{ walle
 
       {DEVELOP_MODE_ENABLED ? (
         <WalletProvider>
-          <DevelopBoard initialWallet={wallet} initialPick={initialPick} initialPickLabel={initialPickLabel} />
+          <DevelopBoard initialWallet={wallet} initialPickSet={initialPickSet} />
         </WalletProvider>
       ) : (
         <div className="panel p-8 text-center">

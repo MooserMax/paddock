@@ -30,8 +30,11 @@ function RevealBar({ pct }: { pct: number }) {
   );
 }
 
-function developHref(wallet: string, ids: number[], from: string): string {
-  return `/develop?wallet=${wallet}&from=${encodeURIComponent(from)}&pick=${ids.join(",")}`;
+// The pick is a SET NAME, not a list of ids: Develop Mode resolves it fresh against
+// the connected wallet, so the link survives the connect step and a refresh re-applies
+// the same set (the URL is the source of truth).
+function developHref(wallet: string, set: "areteam" | "hiddengems" | "nextreveals"): string {
+  return `/develop?wallet=${wallet}&from=stable&pick=${set}`;
 }
 
 function DevelopButton({ href, label, count }: { href: string; label: string; count: number }) {
@@ -85,9 +88,9 @@ export default function StableReport({ summary }: { summary: WalletSummary }) {
       {/* 2. One-click Develop: send the standout sets straight into Develop Mode. */}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <span className="type-micro uppercase tracking-wider text-ink-faint">Develop in one click</span>
-        <DevelopButton href={developHref(wallet, aTeam.map((p) => p.id), "A-Team")} label="Develop my A-Team" count={aTeam.length} />
-        <DevelopButton href={developHref(wallet, hiddenGems.map((p) => p.id), "Hidden Gems")} label="Develop my Hidden Gems" count={hiddenGems.length} />
-        <DevelopButton href={developHref(wallet, revealQueue.map((r) => r.id), "Next reveals")} label="Develop next reveals" count={revealQueue.length} />
+        <DevelopButton href={developHref(wallet, "areteam")} label="Develop my A-Team" count={aTeam.length} />
+        <DevelopButton href={developHref(wallet, "hiddengems")} label="Develop my Hidden Gems" count={hiddenGems.length} />
+        <DevelopButton href={developHref(wallet, "nextreveals")} label="Develop next reveals" count={revealQueue.length} />
       </div>
       <p className="type-micro mt-1.5 normal-case text-ink-faint">Pre-selects that set in Develop Mode (eligible horses only, capped at the field size). You still review and sign, nothing auto-enters.</p>
 

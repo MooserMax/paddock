@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useAccount, usePublicClient, useCapabilities, useSendCalls, useCallsStatus, useSendTransaction } from "wagmi";
-import type { DevelopResponse, DevelopCandidate, DevelopRace } from "@/lib/api/types";
+import type { DevelopResponse, DevelopCandidate, DevelopRace, WalletSummary } from "@/lib/api/types";
 import { ConnectBar } from "@/components/racefinder/EntryControls";
 import { shortAddress } from "@/lib/format";
 import {
@@ -37,6 +37,19 @@ type Mode = "fill" | "create";
 
 const REVEAL_STATS = ["start", "speed", "stamina", "finish"] as const;
 
+// One-click "Develop these" sets from the Stable report. The pick is a SET NAME,
+// resolved fresh against the connected wallet (best-first, exactly the report order),
+// so the link survives connect and a refresh re-applies the same set.
+const SET_LABELS: Record<string, string> = { areteam: "A-Team", hiddengems: "Hidden Gems", nextreveals: "Next reveals" };
+const PICK_STORAGE_KEY = "develop_pick";
+function setIdsFor(set: string, summary: WalletSummary | null): number[] {
+  if (!summary) return [];
+  if (set === "areteam") return summary.aTeam.map((p) => p.id);
+  if (set === "hiddengems") return summary.hiddenGems.map((p) => p.id);
+  if (set === "nextreveals") return summary.revealQueue.map((r) => r.id);
+  return [];
+}
+
 function pctLabel(p: number): string {
   return `${Math.round((p ?? 0) * 100)}% revealed`;
 }
@@ -56,7 +69,7 @@ function assignToSlots(order: number[], freeRaces: DevelopRace[]): { placed: Ass
   return { placed, unplaced };
 }
 
-export default function DevelopBoard({ initialWallet, initialPick = [], initialPickLabel = "" }: { initialWallet: string; initialPick?: number[]; initialPickLabel?: string }) {
+export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { initialWallet: string; initialPickSet?: string }) {
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { sendTransactionAsync } = useSendTransaction();
@@ -90,16 +103,32 @@ export default function DevelopBoard({ initialWallet, initialPick = [], initialP
   // gate clears when the wallet's open created-race resolves, so we poll and re-enable.
   const [createBlock, setCreateBlock] = useState<string | null>(null);
 
-  const wallet = isConnected && address ? address : initialWallet;
+  const connected = isConnected && !!address;
+  const wallet = connected ? (address as string) : initialWallet;
   // In create mode the user can pick at most fieldSize horses; in fill mode the batch cap.
   const selectCap = mode === "create" ? fieldSize : DEVELOP_MAX_BATCH;
 
-  // One-click "Develop these" from the Stable report: pre-select the ELIGIBLE members
-  // of the passed set, best-first (the order given), capped at the field size, and
-  // note what was skipped. Reuses the normal selection state; the user still reviews
-  // and signs. Runs once, after candidates load.
-  const [pickNote, setPickNote] = useState<string | null>(null);
+  // "Develop these" pick set: a SET NAME (areteam | hiddengems | nextreveals) staged
+  // as a create-your-own-race. The URL is the source of truth; we also mirror it to
+  // sessionStorage so the intent survives the connect round-trip even if the URL is
+  // lost. Resolution is deferred until BOTH a wallet is connected AND develop data has
+  // loaded, so we never flash an empty list and the eligibility is re-checked live.
+  const [pickSet, setPickSet] = useState<string>(initialPickSet);
+  const [pickStage, setPickStage] = useState<"none" | "resolving" | "staged" | "empty">(initialPickSet ? "resolving" : "none");
+  const [stageMsg, setStageMsg] = useState<string | null>(null);
+  const [fillAlt, setFillAlt] = useState<{ slots: number; canFill: number } | null>(null);
   const pickApplied = useRef(false);
+  const stagedRef = useRef<HTMLDivElement | null>(null);
+
+  // Restore the pick from sessionStorage if it was dropped from the URL (e.g. some
+  // wallet flows reload), and mirror the URL pick into storage on mount.
+  useEffect(() => {
+    try {
+      if (initialPickSet) { sessionStorage.setItem(PICK_STORAGE_KEY, initialPickSet); return; }
+      const s = sessionStorage.getItem(PICK_STORAGE_KEY);
+      if (s && SET_LABELS[s]) { setPickSet(s); setPickStage("resolving"); }
+    } catch { /* storage blocked: URL still carries the intent */ }
+  }, [initialPickSet]);
 
   const load = useCallback(async () => {
     if (!wallet) { setData(null); return; }
@@ -119,23 +148,49 @@ export default function DevelopBoard({ initialWallet, initialPick = [], initialP
     return () => clearInterval(poll);
   }, [load, phase]);
 
-  // Apply the pre-selected "Develop these" set once candidates are loaded.
+  // Resolve and stage the pick set once: needs a connected wallet AND develop data.
+  // Fetches the wallet's named sets, re-checks eligibility live, stages the eligible
+  // members best-first into a create-your-own-race (field size = eligible count, cap
+  // 8). Handles every state: empty set -> explanatory empty state; otherwise stage and
+  // (if open free slots fit) offer a fill-now alternative.
   useEffect(() => {
-    if (pickApplied.current || initialPick.length === 0 || !data) return;
+    if (pickApplied.current || !pickSet || !SET_LABELS[pickSet]) return;
+    if (!connected || !address || !data) return; // wait for connect + data (no empty-list flash)
     pickApplied.current = true;
-    const byIdLocal = new Map(data.candidates.map((c) => [c.petId, c]));
-    const requested = initialPick.filter((id) => byIdLocal.has(id));
-    const eligible = requested.filter((id) => byIdLocal.get(id)!.status === "available");
-    const chosen = eligible.slice(0, selectCap);
-    setSelected(new Set(chosen));
-    const label = initialPickLabel || "your set";
-    if (chosen.length === 0) {
-      setPickNote(`None of ${label} can be entered right now (resting, racing, or not in this wallet).`);
-    } else {
-      const skipped = requested.length - chosen.length;
-      setPickNote(`Pre-selected ${chosen.length} of ${requested.length} from ${label}${skipped > 0 ? `, ${skipped} ${skipped === 1 ? "is" : "are"} resting, racing, or over the field cap` : ""}.`);
-    }
-  }, [data, initialPick, initialPickLabel, selectCap]);
+    const label = SET_LABELS[pickSet];
+    (async () => {
+      setPickStage("resolving");
+      let summary: WalletSummary | null = null;
+      try {
+        const res = await fetch(`/api/v1/wallet/${address}`, { cache: "no-store" });
+        summary = res.ok ? ((await res.json()) as WalletSummary) : null;
+      } catch { /* fall through to empty */ }
+      const ids = setIdsFor(pickSet, summary);
+      const byIdLocal = new Map(data.candidates.map((c) => [c.petId, c]));
+      const owned = ids.filter((id) => byIdLocal.has(id));
+      const eligible = owned.filter((id) => byIdLocal.get(id)!.status === "available");
+      if (eligible.length === 0) {
+        setPickStage("empty");
+        setStageMsg(`${label} are all racing or resting right now. They will be available after their current races resolve.`);
+        return;
+      }
+      const chosen = eligible.slice(0, CREATE_FIELD_MAX);
+      setMode("create");
+      setFieldSize(chosen.length);
+      setSelected(new Set(chosen));
+      const dropped = owned.length - chosen.length;
+      const droppedNames = owned.filter((id) => !chosen.includes(id)).slice(0, 2).map((id) => byIdLocal.get(id)?.name ?? `#${id}`).join(", ");
+      setStageMsg(
+        dropped > 0
+          ? `Staged ${chosen.length} of ${owned.length} ${label} for a ${chosen.length}-horse race. ${droppedNames}${owned.length - chosen.length > 2 ? " and others" : ""} resting, racing, or over the cap.`
+          : `Staged ${chosen.length} ${label} for a ${chosen.length}-horse race.`
+      );
+      setPickStage("staged");
+      const slots = data.openFreeSlots ?? 0;
+      setFillAlt(slots > 0 ? { slots, canFill: Math.min(slots, chosen.length) } : null);
+      setTimeout(() => stagedRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+    })();
+  }, [pickSet, connected, address, data]);
 
   // Create pre-check: simulate a createRace and decode the result, so the Create
   // button is disabled with the ACCURATE reason (not registered, or an unresolved
@@ -355,6 +410,35 @@ export default function DevelopBoard({ initialWallet, initialPick = [], initialP
     load();
   }
 
+  // Manual mode switch keeps the current selection (never traps the user). Switching
+  // to create sizes the field to fit the selection.
+  function switchMode(m: Mode) {
+    setMode(m);
+    if (m === "create" && selected.size > 0) setFieldSize(Math.min(CREATE_FIELD_MAX, Math.max(CREATE_FIELD_MIN, selected.size)));
+  }
+  // State D: develop the staged set immediately in open free races instead of waiting
+  // for the create gate to clear. Explicit choice; keeps the selection.
+  function fillNow() {
+    setMode("fill");
+  }
+
+  // STATE A: arrived via a pick link but not connected. Keep the intent (URL +
+  // sessionStorage), show the connect prompt with the staged-set banner, and auto-apply
+  // the instant the wallet connects (the resolution effect fires on `connected`).
+  if (pickSet && SET_LABELS[pickSet] && !connected) {
+    return (
+      <div>
+        <ConnectBar />
+        <div className="panel mt-2 p-6 text-center">
+          <p className="type-card-title text-ink">Connect to stage your {SET_LABELS[pickSet]} for a race</p>
+          <p className="type-body mt-1 text-ink-soft">
+            Connect your Abstract wallet and Paddock will stage your {SET_LABELS[pickSet]} into a free race to develop, ready for you to review and sign. Free, zero ETH. Nothing is lost when you connect.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!wallet) {
     return (
       <div>
@@ -383,18 +467,49 @@ export default function DevelopBoard({ initialWallet, initialPick = [], initialP
 
       {error && phase !== "error" && <p className="type-micro mb-3 normal-case" style={{ color: "var(--gold)" }}>{error}</p>}
 
-      {/* Pre-selected set from the Stable report's "Develop these" buttons. */}
-      {phase === "select" && pickNote && (
-        <p className="type-micro mb-3 normal-case rounded-md border px-3 py-2" style={{ borderColor: "var(--line-strong)", color: "var(--ink-soft)" }}>{pickNote}</p>
+      {/* ONE consistent status region (aria-live): the staged-set summary and the
+          create gate reason, updating in place as state changes. The Create CTA points
+          its disabled reason here via aria-describedby. */}
+      {phase === "select" && (stageMsg || (mode === "create" && createBlock)) && (
+        <div id="develop-status" aria-live="polite" className="mb-3 rounded-md border px-3 py-2.5" style={{ borderColor: "var(--line-strong)", background: "var(--paper-raised)" }}>
+          {stageMsg && <p className="type-data text-ink-soft">{stageMsg}</p>}
+          {mode === "create" && createBlock && (
+            <p className="type-micro mt-1 normal-case" style={{ color: "var(--gold)" }}>{createBlock} Paddock re-checks automatically.</p>
+          )}
+          {/* STATE D: gated, but open free slots fit the staged set, so offer to fill now. */}
+          {mode === "create" && createBlock && fillAlt && fillAlt.slots > 0 && (
+            <button onClick={fillNow} className="type-micro uppercase tracking-wider mt-2 rounded-md border px-3 py-1.5 text-ink transition-paddock hover:border-glow" style={{ borderColor: "var(--line-strong)" }}>
+              Or fill open races now ({fillAlt.slots} {fillAlt.slots === 1 ? "slot" : "slots"} open{fillAlt.canFill < selected.size ? `, fills ${fillAlt.canFill} of ${selected.size}` : ""})
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* No empty-list flash: while a pick is resolving, show a brief staging state. */}
+      {phase === "select" && pickStage === "resolving" && (
+        <div className="panel p-8 text-center">
+          <p className="type-card-title text-ink">Staging your {SET_LABELS[pickSet] ?? "set"}</p>
+          <p className="type-body mt-1 text-ink-soft">Checking which horses are ready and building your race.</p>
+        </div>
+      )}
+
+      {/* STATE E: the set has zero currently-eligible members. */}
+      {phase === "select" && pickStage === "empty" && (
+        <div className="panel p-8 text-center">
+          <p className="type-card-title text-ink">{stageMsg ?? "No horses ready right now."}</p>
+          <p className="type-micro mt-3 normal-case">
+            <Link href="/stable" className="transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>Back to your stable</Link>
+          </p>
+        </div>
       )}
 
       {/* Mode: fill open free races, or create your own and pack it with your horses. */}
-      {phase === "select" && (
+      {phase === "select" && pickStage !== "resolving" && pickStage !== "empty" && (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {(["fill", "create"] as Mode[]).map((m) => (
             <button
               key={m}
-              onClick={() => { setMode(m); setSelected(new Set()); }}
+              onClick={() => switchMode(m)}
               aria-pressed={mode === m}
               className="type-micro uppercase tracking-wider rounded-md border px-3 py-1.5 transition-paddock"
               style={{ borderColor: mode === m ? "var(--glow)" : "var(--line-strong)", color: mode === m ? "var(--glow)" : "var(--ink-faint)", background: mode === m ? "color-mix(in srgb, var(--glow) 12%, transparent)" : "transparent" }}
@@ -406,7 +521,7 @@ export default function DevelopBoard({ initialWallet, initialPick = [], initialP
       )}
 
       {/* CREATE config: track length + field size, before picking horses. */}
-      {phase === "select" && mode === "create" && (
+      {phase === "select" && mode === "create" && pickStage !== "resolving" && pickStage !== "empty" && (
         <div className="panel mb-3 p-4">
           <p className="eyebrow">Step 1: your race</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-3">
@@ -432,14 +547,11 @@ export default function DevelopBoard({ initialWallet, initialPick = [], initialP
             </div>
           </div>
           <p className="type-micro mt-3 normal-case text-ink-faint">A free race ({trackLength}m, up to {fieldSize} horses, 0 ETH). Step 1 creates it (one signature), Step 2 enters your selected horses in one batch.</p>
-          {createBlock && (
-            <p className="type-micro mt-2 normal-case" style={{ color: "var(--gold)" }}>{createBlock} Paddock re-checks automatically.</p>
-          )}
         </div>
       )}
 
       {/* SELECT */}
-      {phase === "select" && (
+      {phase === "select" && pickStage !== "resolving" && pickStage !== "empty" && (
         <>
           {candidates.length === 0 ? (
             <div className="panel p-8 text-center">
@@ -447,7 +559,7 @@ export default function DevelopBoard({ initialWallet, initialPick = [], initialP
               <p className="type-body mt-1 text-ink-soft">If you just received one, ownership can take a moment to index.</p>
             </div>
           ) : (
-            <div className="grid gap-2">
+            <div ref={stagedRef} className="grid gap-2">
               {candidates.map((c) => (
                 <DevelopRow
                   key={c.petId}
@@ -480,7 +592,7 @@ export default function DevelopBoard({ initialWallet, initialPick = [], initialP
                 Review batch
               </button>
             ) : (
-              <button onClick={createAndFill} disabled={selected.size === 0 || createBlock != null} className="type-data rounded-md px-5 py-2.5 disabled:opacity-40" style={{ background: "var(--action)", color: "#14110f" }}>
+              <button onClick={createAndFill} disabled={selected.size === 0 || createBlock != null} aria-describedby={createBlock != null ? "develop-status" : undefined} className="type-data rounded-md px-5 py-2.5 disabled:opacity-40" style={{ background: "var(--action)", color: "#14110f" }}>
                 {createBlock != null ? "Can't create yet" : "Create race (Step 1)"}
               </button>
             )}
