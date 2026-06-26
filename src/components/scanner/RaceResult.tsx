@@ -6,12 +6,33 @@ import { formatPct } from "@/lib/format";
 
 // The results view for a race that has already resolved. A user looking at a
 // finished race wants the outcome, not a hypothetical "should you enter." So we
-// lead with the actual finishing order, and then grade our own pre-race call
-// against it: the calibration-page honesty applied to the exact race on screen.
+// lead with a patch-notes recap built ONLY from real finish data (order, times,
+// margins) and our pre-race call, then the full finishing order. There is NO
+// per-segment / position-over-time data in the payload (hasSegments=false), so we
+// invent no motion, splits, or live commentary: every line is grounded in the
+// final result.
 function ordinal(n: number): string {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
   return n + (s[(v - 20) % 10] ?? s[v] ?? s[0]);
+}
+
+// Final time in seconds from on-chain ms.
+const fmtSec = (ms: number, dp: number) => `${(ms / 1000).toFixed(dp)}s`;
+
+// No verified per-race deep-link exists on the Gigaverse SPA (no documented or
+// observable /racing/<id> route), so we link the Racing page honestly rather than
+// ship a deep-link that may 404. A plain external anchor, CSP-compatible.
+const GIGA_RACING_URL = "https://gigaverse.io/racing";
+
+// One patch-notes line: a glow "+" marker and a real, finish-data claim.
+function RecapLine({ children, tone }: { children: React.ReactNode; tone?: "gold" }) {
+  return (
+    <li className="flex gap-2">
+      <span className="type-micro select-none" style={{ color: tone === "gold" ? "var(--gold)" : "var(--glow)" }} aria-hidden>+</span>
+      <span className="type-data text-ink-soft" style={tone === "gold" ? { color: "var(--gold)" } : undefined}>{children}</span>
+    </li>
+  );
 }
 
 export default function RaceResult({
@@ -45,7 +66,6 @@ export default function RaceResult({
   const favoriteHit = !!(winner && favorite && winner.petId === favorite.petId);
 
   const winnerPred = winner ? pred.get(winner.petId) : undefined;
-  const favProb = favorite ? pred.get(favorite.petId)?.prob ?? null : null;
 
   const trackLabel = race.trackLength ? TRACK_LABEL[race.trackLength] ?? `${race.trackLength}m` : "Unknown track";
   const accent = favoriteHit ? "var(--green)" : "var(--gold)";
@@ -84,39 +104,52 @@ export default function RaceResult({
   }
   const rd = winner ? buildReadout(winner) : null;
 
+  // Margins from real finish times: each chaser's gap to the winner, 2nd through 4th.
+  const winTime = winner?.timeMs ?? null;
+  const margins = winTime != null
+    ? order.slice(1, 4)
+        .filter((e) => e.timeMs != null && e.finishPosition != null)
+        .map((e) => `${ordinal(e.finishPosition!)} +${((e.timeMs! - winTime) / 1000).toFixed(2)}s`)
+    : [];
+  // How our pre-race call held up, in one terse line (kept, it is the honesty).
+  const modelCall = !winner ? "" : favoriteHit
+    ? `Model called it: our favorite ${favName(favorite)} went off on top and delivered.`
+    : `Upset: our favorite ${favName(favorite)} finished ${favorite?.finishPosition ? ordinal(favorite.finishPosition) : "off the board"}${winnerPred ? `, the winner was our ${ordinal(winnerPred.rank)} pick` : ""}.`;
+
   return (
     <div className="space-y-5">
-      {/* Self-grade: how our pre-race call held up, never hidden. */}
+      {/* Patch-notes recap: built only from finish order, times, margins, and our call.
+          No motion or splits, that data does not exist. */}
       {winner && (
         <div className="rounded-lg border p-4" style={{ borderColor: accent, background: `color-mix(in srgb, ${accent} 8%, transparent)` }}>
-          <p className="type-micro uppercase tracking-wider" style={{ color: accent }}>
-            {favoriteHit ? "The model called it" : "How our call held up"}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <p className="type-micro uppercase tracking-wider" style={{ color: accent }}>Race recap</p>
+            <a
+              href={GIGA_RACING_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="type-micro uppercase tracking-wider rounded-md border px-2.5 py-1 transition-paddock hover:border-glow hover:text-glow"
+              style={{ borderColor: "var(--line-strong)", color: "var(--ink-soft)" }}
+            >
+              Open Racing on Gigaverse ↗
+            </a>
+          </div>
+          <p className="type-card-title mt-1 text-ink">
+            <Link href={`/pet/${winner.petId}`} className="transition-paddock hover:text-glow">{winner.name ?? `#${winner.petId}`}</Link> wins{winTime != null ? ` in ${fmtSec(winTime, 3)}` : ""}.
           </p>
-          {favoriteHit ? (
-            <p className="type-body mt-1 text-ink">
-              Our favorite{" "}
-              <Link href={`/pet/${favorite!.petId}`} className="text-ink transition-paddock hover:text-glow">{favName(favorite)}</Link>
-              {favProb != null ? ` (${formatPct(favProb, 1)} predicted)` : ""} won.
-            </p>
-          ) : (
-            <p className="type-body mt-1 text-ink-soft">
-              Predicted favorite{" "}
-              <Link href={`/pet/${favorite?.petId}`} className="text-ink transition-paddock hover:text-glow">{favName(favorite)}</Link>
-              {favProb != null ? ` (${formatPct(favProb, 1)})` : ""}{" "}
-              finished {favorite?.finishPosition ? ordinal(favorite.finishPosition) : "off the board"}. Actual winner{" "}
-              <Link href={`/pet/${winner.petId}`} className="text-ink transition-paddock hover:text-glow">{winner.name ?? `#${winner.petId}`}</Link>
-              {winnerPred ? ` was our ${ordinal(winnerPred.rank)} pick${winnerPred.prob != null ? `, ${formatPct(winnerPred.prob, 1)}` : ""}` : ""}.
-            </p>
-          )}
-          {rd && (
-            <p className="type-body mt-2 text-ink-soft">
-              {rd.field}{" "}
-              <Link href={`/pet/${winner.petId}`} className="text-ink transition-paddock hover:text-glow">{winner.name ?? `#${winner.petId}`}</Link>
-              {rd.winnerTail}
-              {rd.trap ? " The board had flagged a payout trap on the split." : ""}
-            </p>
-          )}
-          <p className="type-micro mt-2 normal-case text-ink-faint">
+          <ul className="mt-2 space-y-1">
+            {rd && <RecapLine>{rd.field}</RecapLine>}
+            {rd && (
+              <RecapLine>
+                <Link href={`/pet/${winner.petId}`} className="text-ink-soft transition-paddock hover:text-glow">{winner.name ?? `#${winner.petId}`}</Link>
+                {rd.winnerTail}
+              </RecapLine>
+            )}
+            {margins.length > 0 && <RecapLine>Margins: {margins.join(", ")}.</RecapLine>}
+            {rd?.trap && <RecapLine tone="gold">Payout trap: the board flagged a thin payout split.</RecapLine>}
+            {modelCall && <RecapLine>{modelCall}</RecapLine>}
+          </ul>
+          <p className="type-micro mt-3 normal-case text-ink-faint">
             Model track record on the{" "}
             <Link href="/calibration" className="underline transition-paddock hover:text-glow">calibration page</Link>.
           </p>
@@ -157,6 +190,7 @@ export default function RaceResult({
                   <div className="type-micro text-ink-faint">
                     {e.racesRun ? `${e.wins}/${e.racesRun} raw` : "no prior races"}
                     {e.elo != null ? ` · elo ${Math.round(e.elo)}` : ""}
+                    {e.timeMs != null ? ` · ${e.finishPosition === 1 || winTime == null ? fmtSec(e.timeMs, 3) : `+${((e.timeMs - winTime) / 1000).toFixed(2)}s`}` : ""}
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
