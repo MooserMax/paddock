@@ -39,7 +39,6 @@ export default async function Image({ params }: { params: Promise<{ address: str
 
   const name = s ? ownerDisplay(s.name, s.address) : address.slice(0, 6) + "..." + address.slice(-4);
   const skill = s?.skill;
-  const ranked = skill?.state === "ranked";
   const limited = skill?.state === "limited";
 
   // The character: the stable's highest-cq proven horse (what the grade rates
@@ -47,25 +46,26 @@ export default async function Image({ params }: { params: Promise<{ address: str
   const topHorse = (skill?.topPetId != null ? s?.aTeam.find((p) => p.id === skill.topPetId) : null) ?? s?.aTeam[0] ?? null;
   const horseArt = await imageDataUrl(topHorse?.imgUrl);
 
-  // Hero figure, optimized for the brag: rank 1 stands alone as "#1 STABLE" with
-  // no denominator (the pool size only shrinks the flex). Every other ranked
-  // stable shows its explicit rank with denominator ("#52 OF 195"), one format
-  // top to bottom so stables are directly comparable.
+  // Hero figure: the stable's STANDOUT HORSE, never the stable-average rank. The
+  // average punishes large active stables and reads as "last place", so we lead with
+  // the peak signal the data already provides: the best horse's standing in the whole
+  // game. No rank, no denominator, anywhere on this card.
+  const topPct = skill?.topPetPercentile != null ? formatHorsePercentile(skill.topPetPercentile) : null;
   let heroValue: string;
   let heroLabel: string;
-  if (ranked) {
-    const r = skill!.rank ?? 0;
-    if (r === 1) {
-      heroValue = "#1 STABLE";
-      heroLabel = "the best stable in the game, by proven roster quality";
-    } else {
-      heroValue = `#${r} OF ${skill!.eligibleTotal}`;
-      heroLabel = "by proven roster quality";
-    }
+  if (skill?.topPetIsBest && topHorse) {
+    heroValue = "THE #1 HORSE";
+    heroLabel = `your standout, #${topHorse.id}, confirmed quality ${topHorse.confirmedQuality.toFixed(1)}, best over ${topHorse.bestDistance}m`;
+  } else if (topPct && topHorse) {
+    heroValue = topPct.toUpperCase();
+    heroLabel = `your standout in the game, #${topHorse.id}, confirmed quality ${topHorse.confirmedQuality.toFixed(1)}, best over ${topHorse.bestDistance}m`;
+  } else if (topPct) {
+    heroValue = topPct.toUpperCase();
+    heroLabel = `your standout horse in the game${skill?.topPetCq != null ? `, confirmed quality ${skill.topPetCq.toFixed(1)}` : ""}`;
   } else {
     heroValue = `${s?.petCount ?? 0}`;
     heroLabel = limited
-      ? `Giglings held. ${skill!.provenCount} proven, reveal 3 or more for your stable grade`
+      ? `Giglings held. ${skill?.provenCount ?? 0} proven, reveal 3 or more for your stable grade`
       : "Giglings held. Reveal horses to earn your stable grade";
   }
   const heroSize = heroValue.length <= 7 ? 144 : heroValue.length <= 11 ? 96 : 78;
@@ -86,7 +86,7 @@ export default async function Image({ params }: { params: Promise<{ address: str
             <span style={{ fontSize: 34 }}>Paddock</span>
           </div>
           <span style={{ fontFamily: "JetBrains Mono", fontSize: 20, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
-            Stable grade
+            Stable
           </span>
         </div>
 
@@ -107,21 +107,10 @@ export default async function Image({ params }: { params: Promise<{ address: str
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
               <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.inkFaint, textTransform: "uppercase", letterSpacing: 2, marginBottom: 10 }}>Top horse</span>
               <img src={horseArt} width={250} height={250} style={{ borderRadius: 18, border: `2px solid ${OG_COLORS.line}` }} alt="" />
-              {topHorse && ranked && (
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 12 }}>
-                  <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkSoft }}>
-                    #{topHorse.id} · {topHorse.confirmedQuality.toFixed(1)}
-                  </span>
-                  {skill?.topPetIsBest ? (
-                    <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.glow, textTransform: "uppercase", letterSpacing: 1, marginTop: 4 }}>
-                      #1 horse in the game
-                    </span>
-                  ) : skill?.topPetPercentile != null ? (
-                    <span style={{ fontFamily: "JetBrains Mono", fontSize: 18, color: OG_COLORS.glow, textTransform: "uppercase", letterSpacing: 1, marginTop: 4 }}>
-                      {formatHorsePercentile(skill.topPetPercentile)} in the game
-                    </span>
-                  ) : null}
-                </div>
+              {topHorse && (
+                <span style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: OG_COLORS.inkSoft, marginTop: 12 }}>
+                  #{topHorse.id} · {topHorse.confirmedQuality.toFixed(1)}
+                </span>
               )}
             </div>
           ) : (

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { api } from "@/lib/api/client";
 import type { SiteStats, LeaderboardResponse, RecentWinsResponse } from "@/lib/api/types";
 import WalletSearch from "@/components/WalletSearch";
+import GettingStarted from "@/components/home/GettingStarted";
 import RarityBadge from "@/components/RarityBadge";
 import RecentWins from "@/components/home/RecentWins";
 import { getRecentWins } from "@/lib/api/queries";
@@ -35,6 +36,9 @@ export default async function Home() {
           <div className="assemble mt-8 max-w-2xl" style={{ animationDelay: "120ms" }}>
             <WalletSearch size="lg" />
           </div>
+
+          {/* Getting-started guide: what to do, one tile per feature. */}
+          <GettingStarted />
 
           {stats && (
             <div className="assemble mt-10 flex flex-wrap items-center gap-x-8 gap-y-3" style={{ animationDelay: "160ms" }} aria-label="Live coverage">

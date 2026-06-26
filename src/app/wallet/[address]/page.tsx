@@ -90,7 +90,7 @@ export default async function WalletPage(props: PageProps) {
         <>
           {/* Stable skill: the competitive hook, above the value/flags cards */}
           <div className="mt-8">
-            <StableSkillCard skill={summary.skill} />
+            <StableSkillCard skill={summary.skill} topPet={summary.aTeam.find((p) => p.id === summary.skill.topPetId) ?? summary.aTeam[0] ?? null} />
             <div className="mt-3">
               <ShareStable address={summary.address} skill={summary.skill} />
             </div>

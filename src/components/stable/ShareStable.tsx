@@ -2,23 +2,22 @@
 
 import { useState } from "react";
 import type { StableSkill } from "@/lib/api/types";
-import { stableStanding } from "@/lib/format";
+import { formatHorsePercentile } from "@/lib/format";
 
 // Share trigger on the stable report: an honest pre-filled post (X intent), a
-// copy-link action, and a download of the rendered card image. The post text
-// never claims a rank the data does not support: a percentile only for ranked
-// stables, a neutral line otherwise. No invented social handle, just the link.
+// copy-link action, and a download of the rendered card image. The post leads with
+// the STANDOUT horse (the peak signal), never the stable-average rank, so a large
+// active stable never posts a "last place" rank. No invented social handle.
 export default function ShareStable({ address, skill }: { address: string; skill: StableSkill }) {
   const [copied, setCopied] = useState(false);
 
   const url = typeof window !== "undefined" ? `${window.location.origin}/wallet/${address}` : `/wallet/${address}`;
-  // Rank 1 brags as the best; the rest of the top brags its standing; lower ranks
-  // post a neutral line so nothing awkward (or a rank that misreads) goes out.
+  const pct = skill.topPetPercentile != null ? formatHorsePercentile(skill.topPetPercentile) : null;
   const text =
-    skill.state === "ranked" && skill.rank === 1
-      ? "My Gigling stable is the #1 stable in Gigaverse by proven roster quality on Paddock. Check yours:"
-      : skill.state === "ranked" && skill.percentile != null && skill.percentile <= 0.25
-        ? `My Gigling stable is ${stableStanding(skill.percentile, skill.rank, skill.eligibleTotal)} by proven roster quality on Paddock. Check yours:`
+    skill.topPetIsBest
+      ? "I own the #1 Gigling in Gigaverse by confirmed quality. See my stable on Paddock:"
+      : pct
+        ? `My standout Gigling is ${pct} in Gigaverse by confirmed quality. See my stable on Paddock:`
         : "My Gigling stable on Paddock. Check yours:";
   const intent = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
 
