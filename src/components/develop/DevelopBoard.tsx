@@ -17,6 +17,8 @@ import {
   CREATE_FIELD_MIN,
   CREATE_FIELD_MAX,
   CREATE_TRACK_LENGTHS,
+  mapCreateRevert,
+  revertSelector,
 } from "@/lib/entry/joinRace";
 
 // Develop Mode: race your LEAST-revealed horses into open FREE races to farm stat
@@ -83,6 +85,10 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
   const [trackLength, setTrackLength] = useState<number>(1200);
   const [fieldSize, setFieldSize] = useState<number>(8);
   const [createdRaceId, setCreatedRaceId] = useState<number | null>(null);
+  // Pre-check whether this wallet can create a race right now. Null = can create;
+  // otherwise the accurate reason (unresolved created-race, or not registered). The
+  // gate clears when the wallet's open created-race resolves, so we poll and re-enable.
+  const [createBlock, setCreateBlock] = useState<string | null>(null);
 
   const wallet = isConnected && address ? address : initialWallet;
   // In create mode the user can pick at most fieldSize horses; in fill mode the batch cap.
@@ -105,6 +111,28 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
     const poll = setInterval(() => { if (phase === "select") load(); }, 6000);
     return () => clearInterval(poll);
   }, [load, phase]);
+
+  // Create pre-check: simulate a createRace and decode the result, so the Create
+  // button is disabled with the ACCURATE reason (not registered, or an unresolved
+  // created-race) before the user signs. Polls while in create mode so it re-enables
+  // the moment the wallet's open race resolves. Free, value 0, read-only.
+  const checkCreate = useCallback(async () => {
+    if (mode !== "create" || !address || !publicClient) return;
+    try {
+      const tx = buildCreateRaceTx(fieldSize, trackLength);
+      await publicClient.estimateGas({ account: address as `0x${string}`, to: tx.to, data: tx.data, value: 0n });
+      setCreateBlock(null);
+    } catch (e) {
+      setCreateBlock(mapCreateRevert(revertSelector(e)));
+    }
+  }, [mode, address, publicClient, fieldSize, trackLength]);
+
+  useEffect(() => {
+    if (mode !== "create" || phase !== "select") { setCreateBlock(null); return; }
+    checkCreate();
+    const iv = setInterval(checkCreate, 6000);
+    return () => clearInterval(iv);
+  }, [mode, phase, checkCreate]);
 
   // Track an atomic batch's status once submitted.
   const { data: callsStatus } = useCallsStatus({ id: batchId as string, query: { enabled: !!batchId, refetchInterval: 2000 } });
@@ -204,11 +232,14 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
       setError("Invalid race configuration."); return;
     }
     setPhase("creating");
-    // Registration + validity gate.
+    // Decode the exact revert reason (unresolved created-race, not registered, or
+    // other) and show that, never a wrong reason.
     try {
       await publicClient.estimateGas({ account: address as `0x${string}`, to: tx.to, data: tx.data, value: 0n });
-    } catch {
-      setError("This wallet cannot create races. Creating a race requires a registered Gigaverse account; connect a registered wallet and try again.");
+    } catch (e) {
+      const reason = mapCreateRevert(revertSelector(e));
+      setError(reason);
+      setCreateBlock(reason);
       setPhase("select");
       return;
     }
@@ -371,6 +402,9 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
             </div>
           </div>
           <p className="type-micro mt-3 normal-case text-ink-faint">A free race ({trackLength}m, up to {fieldSize} horses, 0 ETH). Step 1 creates it (one signature), Step 2 enters your selected horses in one batch.</p>
+          {createBlock && (
+            <p className="type-micro mt-2 normal-case" style={{ color: "var(--gold)" }}>{createBlock} Paddock re-checks automatically.</p>
+          )}
         </div>
       )}
 
@@ -416,8 +450,8 @@ export default function DevelopBoard({ initialWallet }: { initialWallet: string 
                 Review batch
               </button>
             ) : (
-              <button onClick={createAndFill} disabled={selected.size === 0} className="type-data rounded-md px-5 py-2.5 disabled:opacity-40" style={{ background: "var(--action)", color: "#14110f" }}>
-                Create race (Step 1)
+              <button onClick={createAndFill} disabled={selected.size === 0 || createBlock != null} className="type-data rounded-md px-5 py-2.5 disabled:opacity-40" style={{ background: "var(--action)", color: "#14110f" }}>
+                {createBlock != null ? "Can't create yet" : "Create race (Step 1)"}
               </button>
             )}
           </div>

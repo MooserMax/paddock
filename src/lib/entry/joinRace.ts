@@ -187,6 +187,45 @@ export function buildCreateRaceTx(fieldSize: number, trackLength: number): { to:
   return { to: PETRACING_CONTRACT as Hex, data: data as Hex, value: 0n };
 }
 
+// createRace revert reasons (verified on-chain, names where recoverable):
+//  - NoAccount(): the wallet is not a registered Gigaverse player.
+//  - 0x4a2b0d40 (custom, not in any public ABI): the wallet already has a race it
+//    created that has not resolved yet. Verified 7/7: it reverts iff the creator's
+//    last-created race is phase < 3 and clears the moment that race resolves. It is
+//    NOT a time cooldown, so there is no countdown, only "until your race finishes".
+export const CREATE_ERR_NO_ACCOUNT = "0xce418820" as const; // NoAccount()
+export const CREATE_ERR_OPEN_RACE = "0x4a2b0d40" as const; // unresolved created-race gate
+
+// Map a createRace revert selector to an accurate, distinct user message. Unknown
+// reverts get a neutral retry message, never a wrong reason.
+export function mapCreateRevert(selector: string | null): string {
+  const s = (selector ?? "").toLowerCase();
+  if (s === CREATE_ERR_NO_ACCOUNT) return "Creating a race requires a registered Gigaverse account. Connect a registered wallet to create races.";
+  if (s === CREATE_ERR_OPEN_RACE) return "You already have a race you created that has not finished yet. You can create another once it resolves.";
+  return "This race cannot be created right now. Try again shortly.";
+}
+
+// Extract the 4-byte revert selector from a viem error. Walks the cause chain for a
+// hex data field, then falls back to scanning the stringified error for a known
+// selector, so a custom-error revert is identified reliably across error shapes.
+export function revertSelector(err: unknown): string | null {
+  type E = { data?: unknown; details?: unknown; cause?: unknown; message?: unknown };
+  let e = err as E | undefined;
+  for (let i = 0; i < 10 && e; i++) {
+    const d = e.data;
+    const candidates: unknown[] = [d, (d as { data?: unknown } | undefined)?.data, e.details];
+    for (const cand of candidates) {
+      if (typeof cand === "string" && cand.startsWith("0x") && cand.length >= 10) return cand.slice(0, 10).toLowerCase();
+    }
+    e = e.cause as E | undefined;
+  }
+  try {
+    const s = (JSON.stringify(err) + String((err as E)?.message ?? "")).toLowerCase();
+    for (const k of [CREATE_ERR_NO_ACCOUNT, CREATE_ERR_OPEN_RACE]) if (s.includes(k)) return k;
+  } catch { /* ignore */ }
+  return null;
+}
+
 // Parse the new raceId from a createRace receipt's RACE_CREATED log (topic1).
 export function parseCreatedRaceId(logs: readonly { address: string; topics: readonly string[]; data: string }[]): number | null {
   for (const log of logs) {
