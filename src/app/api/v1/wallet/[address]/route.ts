@@ -21,8 +21,15 @@ export async function GET(req: NextRequest, props: { params: Promise<{ address: 
     return badRequest("Provide a wallet address (0x + 40 hex). Gigaverse-name lookup is coming.");
   }
 
+  // Manual refresh: force a fresh, wallet-scoped re-read from upstream and bypass the
+  // CDN entirely so the caller gets the just-synced state (and an advanced asOf), not
+  // a cached copy. Read-only: re-syncs and re-scores this wallet's pets, no signature,
+  // no chain write. The client also adds a cache-buster and rate-limits its clicks.
+  const refresh = new URL(req.url).searchParams.get("refresh") === "1";
+
   return guard(async () => {
-    const summary = await getWalletSummary(input);
+    const summary = await getWalletSummary(input, { refresh });
+    if (refresh) return ok(summary, { extraHeaders: { "Cache-Control": "no-store" } });
     // Shorter edge cache so a just-resolved race's updated stats are not served stale
     // for minutes. The client also polls and refetches on focus; this bounds the CDN
     // contribution to staleness to ~90s while still fanning repeat viewers out.

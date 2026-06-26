@@ -29,6 +29,11 @@ export default function StableHome({ initialAddress }: { initialAddress: string 
   const [summary, setSummary] = useState<WalletSummary | null>(null);
   const [perfs, setPerfs] = useState<Perf[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // Client-side cooldown so rapid repeat clicks cannot spam the (real) upstream
+  // re-sync; the server enforces the same window independently as a backstop.
+  const lastRefreshRef = useRef(0);
+  const REFRESH_COOLDOWN_MS = 8_000;
 
   // Reload the stable. Re-run on mount, on a slow poll, and on tab focus, so a
   // just-resolved race's updated stats appear within a bounded window instead of
@@ -65,6 +70,25 @@ export default function StableHome({ initialAddress }: { initialAddress: string 
       if (gen === aliveRef.current) setLoading(false);
     }
   }, [wallet]);
+
+  // Manual refresh: force a fresh, wallet-scoped read (?refresh=1 re-syncs this
+  // wallet's pets upstream and bypasses the CDN; cb busts any stale edge copy). The
+  // button is disabled while in flight and within the cooldown so it cannot be spammed.
+  const refresh = useCallback(async () => {
+    if (!wallet || refreshing) return;
+    const now = Date.now();
+    if (now - lastRefreshRef.current < REFRESH_COOLDOWN_MS) return;
+    lastRefreshRef.current = now;
+    setRefreshing(true);
+    const gen = ++aliveRef.current;
+    try {
+      const res = await fetch(`/api/v1/wallet/${wallet}?refresh=1&cb=${now}`, { cache: "no-store" });
+      const s = res.ok ? ((await res.json()) as WalletSummary) : null;
+      if (gen !== aliveRef.current) return;
+      if (s) setSummary(s); // updates asOf in place; keep current data on a failed read
+    } catch { /* keep current data */ }
+    finally { if (gen === aliveRef.current) setRefreshing(false); }
+  }, [wallet, refreshing]);
 
   useEffect(() => {
     load(true);
@@ -122,7 +146,23 @@ export default function StableHome({ initialAddress }: { initialAddress: string 
               <Link href={`/wallet/${summary.address}`} className="type-micro uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>Full report</Link>
             </div>
             {summary.asOf && (
-              <span className="type-micro normal-case text-ink-faint">Stable data as of {asOfLabel(summary.asOf)}, refreshes automatically</span>
+              <div className="flex flex-col gap-0.5">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="type-micro normal-case text-ink-faint" aria-live="polite">Stable data as of {asOfLabel(summary.asOf)}, refreshes automatically</span>
+                  <button
+                    type="button"
+                    onClick={refresh}
+                    disabled={refreshing}
+                    aria-busy={refreshing}
+                    className="type-micro inline-flex items-center gap-1 uppercase tracking-wider transition-paddock hover:text-glow disabled:cursor-not-allowed disabled:opacity-60"
+                    style={{ color: "var(--glow)" }}
+                  >
+                    <span aria-hidden className={refreshing ? "inline-block animate-spin" : "inline-block"}>{"↻"}</span>
+                    {refreshing ? "Refreshing" : "Refresh"}
+                  </button>
+                </div>
+                <span className="type-micro normal-case text-ink-faint">Refresh pulls your latest revealed stats. Reveals from a race you just ran may take a few minutes to appear.</span>
+              </div>
             )}
           </header>
 

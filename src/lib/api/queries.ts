@@ -1,4 +1,7 @@
 import { db } from "../db";
+import { syncPetIds } from "../ingest/pets";
+import { materializeScoresFor } from "../ingest/scores";
+import { getSyncState, setSyncState } from "../syncState";
 import { lookupUsername, lookupUsernames } from "../accounts";
 import { FRESH_RANGE_WIDTH } from "../scoring/constants";
 import { computeOdds } from "../scoring/odds";
@@ -227,22 +230,49 @@ function toCard(r: OwnedRow): PetCardDTO {
   };
 }
 
-export async function getWalletSummary(address: string): Promise<WalletSummary> {
+// A manual refresh re-syncs ONLY this wallet's pets from the public Gigaverse API
+// (read-only: REST + eth_call, no signature, no chain write) and re-scores them, so
+// the report reflects the latest revealed stats on demand instead of waiting for the
+// cron. Bounded and wallet-scoped, never a global recompute. A short server-side
+// cooldown backstops the client so repeat clicks cannot hammer the upstream.
+const REFRESH_COOLDOWN_MS = 8_000;
+// Cap the per-refresh re-sync so a pathological wallet cannot turn one click into a
+// minutes-long request. 600 pets is 24 spaced batches; larger stables sync the first
+// 600 by id and the rest stay on the cron's rolling refresh.
+const REFRESH_PET_CAP = 600;
+
+async function refreshWalletPets(owner: string): Promise<void> {
+  const key = `wallet_refresh:${owner}`;
+  const last = await getSyncState<{ at: number }>(key);
+  if (last && Date.now() - last.at < REFRESH_COOLDOWN_MS) return; // cooldown: skip the re-sync, serve current data
+  const { data } = await db().from("pets").select("id").eq("owner_address", owner).order("id", { ascending: true }).limit(REFRESH_PET_CAP);
+  const ids = (data ?? []).map((r) => r.id as number);
+  await setSyncState(key, { at: Date.now() }); // stamp before the work so a slow re-sync still holds off concurrent clicks
+  if (ids.length) {
+    await syncPetIds(ids);
+    await materializeScoresFor(ids);
+  }
+}
+
+export async function getWalletSummary(address: string, opts?: { refresh?: boolean }): Promise<WalletSummary> {
   const owner = address.toLowerCase();
+  // On a forced refresh, re-read this wallet's pets from upstream BEFORE the query
+  // below, so the report and its asOf reflect the freshly synced state.
+  if (opts?.refresh) await refreshWalletPets(owner);
   // Separate queries joined in memory: robust and independent of PostgREST
   // foreign-key metadata, and reads only materialized columns.
   // The FULL stable, paginated to completion. A wallet's pets must never cap at a
   // page boundary: petCount, the hatched/total split, stable value, the top-100
   // flag, the A-team, hidden gems, and the reveal queue are all computed from this
   // set, so a truncated subset would be a fabricated count.
-  type WalletPetRow = { id: number; name: string | null; img_url: string | null; rarity: number | null; hatched: boolean; elo: number | null; races_run: number | null };
+  type WalletPetRow = { id: number; name: string | null; img_url: string | null; rarity: number | null; hatched: boolean; elo: number | null; races_run: number | null; last_synced_at: string | null };
   const pets: WalletPetRow[] = [];
   {
     const PAGE = 1000;
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await db()
         .from("pets")
-        .select("id, name, img_url, rarity, hatched, elo, races_run")
+        .select("id, name, img_url, rarity, hatched, elo, races_run, last_synced_at")
         .eq("owner_address", owner)
         .order("id", { ascending: true })
         .range(from, from + PAGE - 1);
@@ -399,9 +429,24 @@ export async function getWalletSummary(address: string): Promise<WalletSummary> 
     revealQueue,
     trackAssignments,
     flags,
-    asOf: await ingestAsOf(),
+    // Per-wallet freshness: the latest time we read THIS wallet's pets from upstream,
+    // floored at the global ingest time so it never reads older than the pipeline. A
+    // manual refresh sets last_synced_at to now, so asOf advances on demand (proving
+    // the refresh did real work) and a later auto-poll never regresses it.
+    asOf: await walletAsOf(pets.map((p) => p.last_synced_at)),
     meta: { source: SOURCE, refreshing: false },
   };
+}
+
+// max(global ingest time, latest of this wallet's pet sync times). Null only if both
+// are unknown.
+async function walletAsOf(petSyncTimes: (string | null)[]): Promise<string | null> {
+  const ingest = await ingestAsOf();
+  let maxSynced: string | null = null;
+  for (const t of petSyncTimes) if (t && (maxSynced === null || t > maxSynced)) maxSynced = t;
+  if (ingest === null) return maxSynced;
+  if (maxSynced === null) return ingest;
+  return maxSynced > ingest ? maxSynced : ingest;
 }
 
 async function topConfirmedIds(n: number): Promise<Set<number>> {
