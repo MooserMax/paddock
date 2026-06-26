@@ -35,15 +35,16 @@ export default async function RacesPage(props: { searchParams: Promise<{ track?:
 
   return (
     <div className="mx-auto max-w-page px-4 py-8 md:px-6 md:py-12">
+      {/* In-flight races for the connected wallet, FIRST so a just-entered race is seen
+          without scrolling past the heading. Renders nothing (no top gap) when there are
+          none, leaving Recent races as the first content. */}
+      <ConnectedLiveRaces />
+
       <header className="mb-6">
         <p className="eyebrow">Live from our database</p>
         <h1 className="type-page-title mt-2 text-ink">Recent races</h1>
         <p className="type-body mt-2 text-ink-soft">Every race that ran, newest first. The Finished column is when the race resolved in-game, not when we synced. Races only resolve once they fill, so gaps between finishes are normal. Tap one for the scanner verdict.</p>
       </header>
-
-      {/* In-flight races for the connected wallet, the natural place to look after
-          entering. Renders nothing when there are none. */}
-      <ConnectedLiveRaces />
 
       {/* Track + participant filter */}
       <nav className="mb-5 flex flex-wrap gap-2" aria-label="Filter races">

@@ -47,7 +47,7 @@ export default function LiveRaces({ wallet }: { wallet: string }) {
   if (!loaded || races.length === 0) return null;
 
   return (
-    <section className="assemble mt-8">
+    <section className="assemble mt-8 mb-8">
       <header className="mb-3">
         <p className="eyebrow">Live now</p>
         <h2 className="type-section text-ink">Races in progress</h2>
