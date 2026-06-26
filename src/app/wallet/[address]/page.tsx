@@ -6,6 +6,7 @@ import PetCard from "@/components/PetCard";
 import Panel from "@/components/ui/Panel";
 import StableSkillCard from "@/components/stable/StableSkillCard";
 import ShareStable from "@/components/stable/ShareStable";
+import LiveRaces from "@/components/wallet/LiveRaces";
 import WalletSearch from "@/components/WalletSearch";
 import { TRACK_LABEL } from "@/lib/display";
 import { formatEth, formatInt, formatScore, shortAddress, ownerDisplay } from "@/lib/format";
@@ -76,6 +77,10 @@ export default async function WalletPage(props: PageProps) {
         {/* The URL is the address, so always keep the full wallet visible to copy. */}
         <p className="type-micro tabular-nums text-ink-faint" title={summary.address}>{summary.address}</p>
       </header>
+
+      {/* In-flight races: LIVE until they resolve, then a recap link. Renders nothing
+          when this wallet has none in flight. */}
+      <LiveRaces wallet={summary.address} />
 
       {empty ? (
         <Panel className="assemble mt-8" eyebrow="Empty paddock" title="No Giglings here">

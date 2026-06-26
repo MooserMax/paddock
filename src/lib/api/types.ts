@@ -469,6 +469,25 @@ export interface LobbyResponse {
   meta: { source: string; note: string };
 }
 
+// Live-races tracker: a wallet's in-flight (joined, not yet resolved) races, derived
+// from on-chain RACE_JOINED logs minus Paddock's resolved-race DB. status flips from
+// "live" to "finished" once Paddock has the race as resolved.
+export interface LiveRaceItem {
+  raceId: number;
+  petIds: number[]; // the wallet's pet(s) entered in this race
+  status: "live" | "finished";
+  trackLength: number | null; // from the DB when known, else null (not yet ingested)
+  resolvedAt: string | null;
+}
+export interface LiveRacesResponse {
+  wallet: string;
+  races: LiveRaceItem[];
+  headBlock: number;
+  windowBlocks: number;
+  pollMs: number; // suggested client poll interval
+  meta: { source: string };
+}
+
 export type RecordMode = "raw" | "adjusted";
 export type RecordWindow = "all" | "weekly" | "daily";
 

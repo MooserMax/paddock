@@ -42,3 +42,42 @@ export async function findMyRace(wallet: string): Promise<{ raceId: number; petI
   }
   return null;
 }
+
+// ---- Live-races tracker: ALL of a wallet's recent joins (not just the latest) -----
+// The in-flight tracker needs every race the wallet joined in a bounded recent window,
+// so it can show each as LIVE until Paddock's DB has it resolved. One topic-filtered
+// (owner) eth_getLogs over the window; the indexed topics mean the RPC returns only
+// this wallet's joins (a handful), so it stays cheap even over a wide window.
+const LIVE_LOOKBACK_BLOCKS = 20_000n; // ~2.8h on Abstract (~0.5s/block): covers the 1h open-expiry plus recently finished, then ages old joins out so nothing shows LIVE forever.
+
+async function joinedLogsByOwner(lo: bigint, hi: bigint, owner: Hex): Promise<{ topics: string[]; blockNumber: string }[]> {
+  if (lo > hi) return [];
+  try {
+    return (await chainClient().request({
+      method: "eth_getLogs",
+      params: [{ address: PETRACING_CONTRACT as Hex, fromBlock: `0x${lo.toString(16)}`, toBlock: `0x${hi.toString(16)}`, topics: [TOPIC_RACE_JOINED, null, null, owner] }],
+    })) as { topics: string[]; blockNumber: string }[];
+  } catch (err) {
+    // Halve on an RPC range/result rejection, down to a small floor, then rethrow.
+    if (hi - lo < 500n) throw err;
+    const mid = lo + (hi - lo) / 2n;
+    const [a, b] = await Promise.all([joinedLogsByOwner(lo, mid, owner), joinedLogsByOwner(mid + 1n, hi, owner)]);
+    return [...a, ...b];
+  }
+}
+
+export interface JoinedRaceLog { raceId: number; petId: number; block: number; }
+
+// All RACE_JOINED logs for `wallet` in the bounded lookback window, plus the head block
+// (so the caller can reason about age). Read-only: eth_getLogs only, no writes.
+export async function findMyJoinedRaces(wallet: string): Promise<{ races: JoinedRaceLog[]; head: number; windowBlocks: number }> {
+  const owner = ownerTopic(wallet);
+  const head = await latestBlock();
+  const lo = head - LIVE_LOOKBACK_BLOCKS > 0n ? head - LIVE_LOOKBACK_BLOCKS : 0n;
+  const logs = await joinedLogsByOwner(lo, head, owner);
+  return {
+    head: Number(head),
+    windowBlocks: Number(LIVE_LOOKBACK_BLOCKS),
+    races: logs.map((l) => ({ raceId: Number(BigInt(l.topics[1])), petId: Number(BigInt(l.topics[2])), block: Number(BigInt(l.blockNumber)) })),
+  };
+}
