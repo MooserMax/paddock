@@ -4,6 +4,7 @@ import { Crimson_Pro, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Nav from "@/components/shell/Nav";
 import Footer from "@/components/shell/Footer";
+import WalletProvider from "@/components/racefinder/WalletProvider";
 
 const crimson = Crimson_Pro({
   subsets: ["latin"],
@@ -60,11 +61,17 @@ export default async function RootLayout({
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className={`${crimson.variable} ${jetbrains.variable} bg-aurora`}>
-        <div className="flex min-h-screen flex-col">
-          <Nav />
-          <main className="flex-1">{children}</main>
-          <Footer />
-        </div>
+        {/* One app-wide wallet context so the top-right wallet pill (in Nav) and the
+            per-page boards share a SINGLE connection. Read-only pages render their
+            server content through it untouched; the AGW connector only activates on
+            an explicit connect. */}
+        <WalletProvider>
+          <div className="flex min-h-screen flex-col">
+            <Nav />
+            <main className="flex-1">{children}</main>
+            <Footer />
+          </div>
+        </WalletProvider>
       </body>
     </html>
   );

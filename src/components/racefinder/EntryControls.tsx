@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
-import { useAccount, useConnect, useDisconnect, usePublicClient, useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
+import { useAccount, useConnect, usePublicClient, useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { useLoginWithAbstract } from "@abstract-foundation/agw-react";
 import type { LobbyRow, LobbyResponse, LobbyEdgeOption } from "@/lib/api/types";
 import { shortAddress, formatEth } from "@/lib/format";
@@ -20,7 +19,6 @@ export function ConnectBar() {
   const { address, isConnected } = useAccount();
   const { login } = useLoginWithAbstract();
   const { connect, connectors, isPending } = useConnect();
-  const { disconnect } = useDisconnect();
   const injected = connectors.find((c) => c.type === "injected");
 
   // Mirror connection state to the lightweight flag the global nav reads, so the
@@ -29,20 +27,10 @@ export function ConnectBar() {
     setWalletFlag(isConnected && address ? address : null);
   }, [isConnected, address]);
 
-  if (isConnected && address) {
-    return (
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2" style={{ borderColor: "var(--line-strong)", background: "var(--paper-raised)" }}>
-        <span className="type-data text-ink-soft">
-          <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--green)" }} aria-hidden />
-          Wallet connected, {shortAddress(address)}, showing your edge
-        </span>
-        <span className="flex items-center gap-3">
-          <Link href="/stable" className="type-micro uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>Your stable</Link>
-          <button onClick={() => disconnect()} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Disconnect</button>
-        </span>
-      </div>
-    );
-  }
+  // The connected affordance now lives in the app-wide nav pill (WalletPill), so the old
+  // wide in-content strip renders nothing. Disconnected, we still show the contextual
+  // connect prompt below, in place.
+  if (isConnected && address) return null;
   return (
     <div className="mb-3 flex flex-col gap-2 sm:flex-row">
       <button onClick={() => login()} className="type-data rounded-md px-5 py-2.5" style={{ background: "var(--action)", color: "#14110f" }}>

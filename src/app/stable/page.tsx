@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import WalletProvider from "@/components/racefinder/WalletProvider";
 import StableHome from "@/components/stable/StableHome";
 
 export const metadata: Metadata = {
@@ -23,9 +22,7 @@ export default async function StablePage(props: { searchParams: Promise<{ addres
         </p>
       </header>
 
-      <WalletProvider>
-        <StableHome initialAddress={address} />
-      </WalletProvider>
+      <StableHome initialAddress={address} />
     </div>
   );
 }

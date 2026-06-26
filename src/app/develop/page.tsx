@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import DevelopBoard from "@/components/develop/DevelopBoard";
-import WalletProvider from "@/components/racefinder/WalletProvider";
 import { DEVELOP_MODE_ENABLED } from "@/lib/entry/joinRace";
 
 export const metadata: Metadata = {
@@ -25,14 +24,12 @@ export default async function DevelopPage(props: { searchParams: Promise<{ walle
         <p className="eyebrow">Bulk reveal farming</p>
         <h1 className="type-page-title mt-2 text-balance text-ink">Develop Mode</h1>
         <p className="type-body mt-3 text-ink-soft">
-          The opposite of the win board: race your LEAST-revealed horses into open free races to farm stat reveals, cheaply, in bulk. Pick your horses, Paddock places each into a free race, and you enter them all in one signature. Free races cost 0 ETH, so nothing is ever at risk.
+          Develop your horses. Race your least-revealed Giglings in free races to farm stat reveals, in bulk, for no entry fee. Pick horses with the filters below, or jump straight to a set with A-Team, Hidden Gems, or Next reveals. Paddock stages each one and you enter them all in a single signature.
         </p>
       </header>
 
       {DEVELOP_MODE_ENABLED ? (
-        <WalletProvider>
-          <DevelopBoard initialWallet={wallet} initialPickSet={initialPickSet} />
-        </WalletProvider>
+        <DevelopBoard initialWallet={wallet} initialPickSet={initialPickSet} />
       ) : (
         <div className="panel p-8 text-center">
           <p className="type-card-title text-ink">Develop Mode is coming soon</p>

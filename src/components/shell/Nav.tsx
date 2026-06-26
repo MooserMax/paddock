@@ -4,6 +4,7 @@ import ThemeToggle from "./ThemeToggle";
 import CommandTrigger from "./CommandTrigger";
 import DocsDropdown from "./DocsDropdown";
 import StableNavItem from "./StableNavItem";
+import WalletPill from "./WalletPill";
 import { NAV_ROUTES } from "@/lib/nav";
 
 export default function Nav() {
@@ -43,6 +44,7 @@ export default function Nav() {
         <div className="flex items-center gap-2">
           <CommandTrigger />
           <ThemeToggle />
+          <WalletPill />
         </div>
       </nav>
     </header>

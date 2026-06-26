@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import RaceFinderBoard from "@/components/racefinder/RaceFinderBoard";
-import WalletProvider from "@/components/racefinder/WalletProvider";
 
 export const metadata: Metadata = {
   title: "Race Finder",
@@ -23,9 +22,7 @@ export default async function RaceFinderPage(props: { searchParams: Promise<{ wa
         </p>
       </header>
 
-      <WalletProvider>
-        <RaceFinderBoard initialWallet={wallet} />
-      </WalletProvider>
+      <RaceFinderBoard initialWallet={wallet} />
     </div>
   );
 }
