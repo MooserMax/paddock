@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useAccount, useConnect, usePublicClient, useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { useLoginWithAbstract } from "@abstract-foundation/agw-react";
 import type { LobbyRow, LobbyResponse, LobbyEdgeOption } from "@/lib/api/types";
@@ -233,7 +234,12 @@ export function EntryModal({ lobby, pick, walletAddress, onClose, onEntered }: {
         {phase === "rejected" && <p className="type-data mt-3 text-ink-soft">{reason}</p>}
         {phase === "failed" && <p className="type-data mt-3" style={{ color: "var(--brick)" }}>{reason}</p>}
         {phase === "pending" && <p className="type-data mt-3 text-ink-soft">Transaction sent, waiting for confirmation. Your entrant appears on the next lobby refresh.</p>}
-        {phase === "confirmed" && <p className="type-data mt-3" style={{ color: "var(--green)" }}>Entered. {edge.petName ?? `#${edge.petId}`} is in race #{lobby.raceId}.</p>}
+        {phase === "confirmed" && (
+          <p className="type-data mt-3" style={{ color: "var(--green)" }}>
+            Entered. {edge.petName ?? `#${edge.petId}`} is in race #{lobby.raceId}.{" "}
+            <Link href="/races" className="underline transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>View your live races</Link>
+          </p>
+        )}
 
         <div className="mt-4 flex gap-2">
           {(phase === "review" || phase === "blocked" || phase === "rejected" || phase === "failed") && (
@@ -255,6 +261,17 @@ export function EntryModal({ lobby, pick, walletAddress, onClose, onEntered }: {
             <button disabled className="type-data flex-1 rounded-md px-4 py-2.5 opacity-70" style={{ background: "var(--action)", color: "#14110f" }}>
               {phase === "validating" ? "Checking the race is still open" : "Confirm in your wallet"}
             </button>
+          )}
+          {phase === "confirmed" && (
+            <a
+              href={`https://gigaverse.io/racing/race/${lobby.raceId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="type-data flex-1 rounded-md px-4 py-2.5 text-center"
+              style={{ background: "var(--action)", color: "#14110f" }}
+            >
+              Watch race live ↗
+            </a>
           )}
           {(phase === "pending" || phase === "confirmed") && (
             <button onClick={onClose} className="type-data flex-1 rounded-md border px-4 py-2.5 text-ink" style={{ borderColor: "var(--line-strong)" }}>Done</button>

@@ -997,6 +997,8 @@ function ResultsPanel({ results, byId, dropped, unplaced, onReset }: { results: 
   const name = (id: number) => byId.get(id)?.name ?? `#${id}`;
   const ok = results.filter((r) => r.ok);
   const failed = results.filter((r) => !r.ok);
+  // The distinct races just entered, for a direct watch-live link to each.
+  const okRaceIds = [...new Set(ok.map((r) => r.raceId))];
   return (
     <div className="panel mt-4 p-5">
       <p className="eyebrow">Develop batch</p>
@@ -1010,7 +1012,26 @@ function ResultsPanel({ results, byId, dropped, unplaced, onReset }: { results: 
           Left out beforehand: {[...dropped.map((d) => name(d.petId)), ...unplaced.map(name)].join(", ")}.
         </p>
       )}
-      <button onClick={onReset} className="type-data mt-4 rounded-md px-4 py-2.5" style={{ background: "var(--action)", color: "#14110f" }}>Develop more</button>
+      {/* Watch live: straight to the race(s) just entered, plus the Races tab tracker
+          that flips each to FINISHED when it resolves. */}
+      {okRaceIds.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {okRaceIds.map((rid) => (
+            <a
+              key={rid}
+              href={`https://gigaverse.io/racing/race/${rid}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="type-micro uppercase tracking-wider rounded-md px-3 py-1.5 transition-paddock"
+              style={{ background: "var(--action)", color: "#14110f" }}
+            >
+              Watch race #{rid} live ↗
+            </a>
+          ))}
+          <Link href="/races" className="type-micro uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>View your live races</Link>
+        </div>
+      )}
+      <button onClick={onReset} className="type-data mt-4 rounded-md border px-4 py-2.5 text-ink transition-paddock hover:border-glow" style={{ borderColor: "var(--line-strong)" }}>Develop more</button>
     </div>
   );
 }
