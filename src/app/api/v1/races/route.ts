@@ -29,8 +29,13 @@ export async function GET(req: NextRequest) {
   limit = Math.min(MAX_LIMIT, Math.floor(limit));
   offset = Math.floor(offset);
 
+  // Optional participant filter: only races this wallet entered. Validated here;
+  // a malformed address is ignored (returns all races) rather than erroring.
+  const walletParam = sp.get("wallet");
+  const wallet = walletParam && /^0x[0-9a-fA-F]{40}$/.test(walletParam) ? walletParam : null;
+
   return guard(async () => {
-    const result = await getRecentRaces(track, limit, offset);
+    const result = await getRecentRaces(track, limit, offset, wallet);
     return ok(result, { sMaxAge: 30, staleWhileRevalidate: 120 });
   });
 }

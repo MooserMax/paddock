@@ -324,6 +324,9 @@ export interface RaceListItem {
   payoutBps: number[] | null;
   winnerPetId: number | null;
   winnerName: string | null;
+  // Populated only when the list is filtered to a participant wallet: that wallet's
+  // own entrant(s) in this race and how they finished, so "My races" can show "you: #6252 1st".
+  mine?: { petId: number; name: string | null; finishPosition: number | null }[];
 }
 
 export interface RaceListResponse {
@@ -331,6 +334,7 @@ export interface RaceListResponse {
   limit: number;
   offset: number;
   track: number | null;
+  wallet: string | null; // the participant filter applied (lowercased), or null for all races
   meta: { source: string };
 }
 

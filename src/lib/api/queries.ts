@@ -930,19 +930,37 @@ export async function getSiteStats(): Promise<SiteStats> {
 // ---- Races feed -------------------------------------------------------------
 import type { RaceListResponse, RaceListItem } from "./types";
 
-export async function getRecentRaces(track: number | null, limit: number, offset: number): Promise<RaceListResponse> {
-  let q = db()
-    .from("races")
-    .select("race_id, track_length, field_size, race_temp, resolved_at, payout_bps")
-    .eq("resolved", true)
-    .eq("hydrated", true)
-    .order("resolved_at", { ascending: false, nullsFirst: false })
-    .range(offset, offset + limit - 1);
+export async function getRecentRaces(track: number | null, limit: number, offset: number, wallet?: string | null): Promise<RaceListResponse> {
+  const owner = wallet && /^0x[0-9a-fA-F]{40}$/.test(wallet) ? wallet.toLowerCase() : null;
+  // Participant filter: an INNER join to race_entries on the wallet's owner_address
+  // (race_entries_owner_idx) returns only races this wallet entered, and the embedded
+  // rows are filtered to that owner, so each race also carries the wallet's own
+  // entrant(s) and finish in the SAME query. No full scan: the owner index drives it.
+  // The embed is not in the generated relationship types, so this one query is built
+  // through an untyped builder and its rows are read via the explicit shape below.
+  type RaceFeedRow = {
+    race_id: number; track_length: number | null; field_size: number | null; race_temp: string | null;
+    resolved_at: string | null; payout_bps: number[] | null;
+    race_entries?: { pet_id: number; owner_address: string | null; finish_position: number | null }[];
+  };
+  type RaceQ = {
+    eq: (c: string, v: unknown) => RaceQ;
+    order: (c: string, o: unknown) => RaceQ;
+    range: (a: number, b: number) => Promise<{ data: RaceFeedRow[] | null; error: { message: string } | null }>;
+  };
+  const select = (s: string) => (db().from("races") as unknown as { select: (s: string) => RaceQ }).select(s);
+  let q = select(
+    owner
+      ? "race_id, track_length, field_size, race_temp, resolved_at, payout_bps, race_entries!inner(pet_id, owner_address, finish_position)"
+      : "race_id, track_length, field_size, race_temp, resolved_at, payout_bps"
+  );
+  q = q.eq("resolved", true).eq("hydrated", true);
+  if (owner) q = q.eq("race_entries.owner_address", owner);
   if (track) q = q.eq("track_length", track);
-  const { data, error } = await q;
+  const { data, error } = await q.order("resolved_at", { ascending: false, nullsFirst: false }).range(offset, offset + limit - 1);
   if (error) throw new Error(`races feed query failed: ${error.message}`);
 
-  const raceIds = (data ?? []).map((r) => r.race_id as number);
+  const raceIds = (data ?? []).map((r) => r.race_id);
   // Winner = finish_position 1 for each race, fetched in one query then mapped.
   const { data: winners } = await db()
     .from("race_entries")
@@ -950,8 +968,20 @@ export async function getRecentRaces(track: number | null, limit: number, offset
     .in("race_id", raceIds.length ? raceIds : [-1])
     .eq("finish_position", 1);
   const winnerByRace = new Map((winners ?? []).map((w) => [w.race_id as number, w.pet_id as number]));
-  const winnerIds = [...new Set([...winnerByRace.values()])];
-  const { data: petNames } = await db().from("pets").select("id, name").in("id", winnerIds.length ? winnerIds : [-1]);
+
+  // The wallet's own entrant(s) per race, from the embedded inner-join rows.
+  type MineRow = { petId: number; finishPosition: number | null };
+  const mineByRace = new Map<number, MineRow[]>();
+  if (owner) {
+    for (const r of data ?? []) {
+      const entries = ((r as { race_entries?: { pet_id: number; finish_position: number | null }[] }).race_entries) ?? [];
+      mineByRace.set(r.race_id as number, entries.map((e) => ({ petId: e.pet_id, finishPosition: e.finish_position })));
+    }
+  }
+
+  // One name lookup covering winners and the wallet's own horses.
+  const namePetIds = [...new Set([...winnerByRace.values(), ...[...mineByRace.values()].flat().map((m) => m.petId)])];
+  const { data: petNames } = await db().from("pets").select("id, name").in("id", namePetIds.length ? namePetIds : [-1]);
   const nameById = new Map((petNames ?? []).map((p) => [p.id as number, p.name as string | null]));
 
   const races: RaceListItem[] = (data ?? []).map((r) => {
@@ -965,10 +995,11 @@ export async function getRecentRaces(track: number | null, limit: number, offset
       payoutBps: (r.payout_bps as number[]) ?? null,
       winnerPetId,
       winnerName: winnerPetId != null ? nameById.get(winnerPetId) ?? null : null,
+      ...(owner ? { mine: (mineByRace.get(r.race_id as number) ?? []).map((m) => ({ petId: m.petId, name: nameById.get(m.petId) ?? null, finishPosition: m.finishPosition })) } : {}),
     };
   });
 
-  return { races, limit, offset, track, meta: { source: SOURCE } };
+  return { races, limit, offset, track, wallet: owner, meta: { source: SOURCE } };
 }
 
 // ---- Live-lobby scan (arbitrary pet ids, not a stored race) -----------------

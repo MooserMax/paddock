@@ -52,6 +52,38 @@ export default function RaceResult({
 
   const favName = (e: typeof favorite) => e?.name ?? `#${e?.petId}`;
 
+  // Race-specific alpha from the entrants + verdict: the strength of the field, what
+  // distinguished the winner, and any structural flag. Reads from real fields only and
+  // generalizes across a shark field, a soft field, a chalk winner, or an upset.
+  function buildReadout(w: NonNullable<typeof winner>): { field: string; winnerTail: string; trap: boolean } {
+    const E = race.entrants;
+    const elos = E.map((e) => e.elo).filter((x): x is number => x != null);
+    const topElo = elos.length ? Math.max(...elos) : null;
+    const sharks = E.filter((e) => e.isShark);
+    const inForm = E.filter((e) => e.highElo && !e.isShark);
+    // Proven = won a race other than (possibly) this one, so a debut winner does not
+    // make a soft field read as stacked.
+    const proven = E.filter((e) => e.wins >= 1 && e.racesRun >= 2);
+
+    let field: string;
+    if (sharks.length) field = `Sharp field: ${sharks.length} shark${sharks.length > 1 ? "s" : ""}${inForm.length ? ` and ${inForm.length} in form` : ""}`;
+    else if (inForm.length) field = `Live field: ${inForm.length} in form`;
+    else if (proven.length === 0) field = "Soft field: no proven winners";
+    else field = `${proven.length} proven winner${proven.length > 1 ? "s" : ""} in the field`;
+    if (topElo != null) field += `, top ELO ${Math.round(topElo)}`;
+    field += ".";
+
+    const timing = w.racesRun <= 1 ? "first time out" : "";
+    let quality = "";
+    if (race.trackLength != null && w.bestDistance === race.trackLength) quality = "with the distance on its side";
+    else if (w.isShark) quality = "as the field's shark";
+    else if (topElo != null && w.elo != null && w.elo === topElo) quality = "as the class of the field";
+    else if (w.rawWinRate != null && w.racesRun >= 5 && w.rawWinRate >= 0.15) quality = `a ${formatPct(w.rawWinRate, 0)} career winner`;
+    const tail = [timing, quality].filter(Boolean).join(" ");
+    return { field, winnerTail: ` took it${tail ? " " + tail : ""}.`, trap: race.verdict?.payoutTrap ?? false };
+  }
+  const rd = winner ? buildReadout(winner) : null;
+
   return (
     <div className="space-y-5">
       {/* Self-grade: how our pre-race call held up, never hidden. */}
@@ -76,8 +108,16 @@ export default function RaceResult({
               {winnerPred ? ` was our ${ordinal(winnerPred.rank)} pick${winnerPred.prob != null ? `, ${formatPct(winnerPred.prob, 1)}` : ""}` : ""}.
             </p>
           )}
+          {rd && (
+            <p className="type-body mt-2 text-ink-soft">
+              {rd.field}{" "}
+              <Link href={`/pet/${winner.petId}`} className="text-ink transition-paddock hover:text-glow">{winner.name ?? `#${winner.petId}`}</Link>
+              {rd.winnerTail}
+              {rd.trap ? " The board had flagged a payout trap on the split." : ""}
+            </p>
+          )}
           <p className="type-micro mt-2 normal-case text-ink-faint">
-            One race is an anecdote. The model grades itself across every race on the{" "}
+            Model track record on the{" "}
             <Link href="/calibration" className="underline transition-paddock hover:text-glow">calibration page</Link>.
           </p>
         </div>

@@ -85,8 +85,8 @@ export const api = {
   lobbies: (wallet?: string | null, pet?: number | null, o?: FetchOpts) =>
     apiGet<LobbyResponse>(`/lobbies?${wallet ? `wallet=${wallet}&` : ""}${pet != null ? `pet=${pet}&` : ""}`.replace(/[?&]$/, ""), o ?? { revalidate: 0 }),
   stats: (o?: FetchOpts) => apiGet<SiteStats>(`/stats`, o ?? { revalidate: 60 }),
-  races: (track?: number | null, limit = 24, offset = 0, o?: FetchOpts) =>
-    apiGet<RaceListResponse>(`/races?limit=${limit}&offset=${offset}${track ? `&track=${track}` : ""}`, o ?? { revalidate: 30 }),
+  races: (track?: number | null, limit = 24, offset = 0, wallet?: string | null, o?: FetchOpts) =>
+    apiGet<RaceListResponse>(`/races?limit=${limit}&offset=${offset}${track ? `&track=${track}` : ""}${wallet ? `&wallet=${wallet}` : ""}`, o ?? { revalidate: 30 }),
   scan: (petIds: number[], track: number, mark?: number, o?: FetchOpts) =>
     apiGet<RaceDetail>(`/scan?pets=${petIds.join(",")}&track=${track}${mark ? `&mark=${mark}` : ""}`, o ?? { revalidate: 0 }),
   calibration: (o?: FetchOpts) => apiGet<CalibrationResult>(`/calibration`, o ?? { revalidate: 600 }),
