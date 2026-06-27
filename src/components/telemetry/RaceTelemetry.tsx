@@ -24,7 +24,13 @@ const BG = "#0b0a09";
 const FIELD_RATIO = 0.4; // runner height / lane spacing (field)
 const HERO_RATIO = 0.42; // hero, still under the 0.45 ceiling
 const STRIDE_M = 16; // meters per full stride cycle, sets leg cadence
-const PLAY_MS = 15000; // default replay duration (relative tick timing preserved)
+const PLAY_MS = 11000; // brisk replay duration (8 to 14s); real time would be 55 to 160s
+
+// Eased playback velocity over the run: a measured ramp off the gate and a slow-motion
+// settle at the line, faster through the mid-race action, so it never feels mechanical.
+// The order of overtakes is preserved because progress stays monotonic in tick time.
+const VEL_MEAN = 0.55 + 0.9 * (2 / Math.PI);
+const vel = (p: number) => (0.55 + 0.9 * Math.sin(Math.PI * Math.max(0, Math.min(1, p)))) / VEL_MEAN;
 
 type Layout = {
   w: number; h: number;
@@ -120,26 +126,34 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
     // velocity norm per frame per pet, for trail length
     const frames = data.frames;
     const vmax = new Array(N).fill(1e-6);
-    const vel: number[][] = frames.map((f, fi) => f.pos.map((m, i) => {
+    const vel2: number[][] = frames.map((f, fi) => f.pos.map((m, i) => {
       const v = fi === 0 ? 0 : Math.max(0, m - frames[fi - 1].pos[i]);
       if (v > vmax[i]) vmax[i] = v;
       return v;
     }));
-    const velNorm = vel.map((row) => row.map((v, i) => v / vmax[i]));
-    // decisive moment: first frame the hero holds its final rank
+    const velNorm = vel2.map((row) => row.map((v, i) => v / vmax[i]));
+    // decisive moment: first frame the hero holds its final rank (used only for the flare)
     let decisive = 0;
     if (heroIndex >= 0) { for (let f = 0; f < frames.length; f++) { if (frames[f].rank[heroIndex] === heroFinalRank) { decisive = f; break; } } }
-    return { laneOf, color, velNorm, decisiveProgress: frames.length > 1 ? decisive / (frames.length - 1) : 0 };
+    // balanced static still: the most strung-out frame in the middle of the race, so a
+    // reduced-motion or share frame shows runners SPREAD, never piled at the line.
+    let bestSpread = -1, bestF = Math.floor(frames.length * 0.45);
+    const lo = Math.floor(frames.length * 0.3), hi = Math.floor(frames.length * 0.72);
+    for (let f = lo; f <= hi && f < frames.length; f++) {
+      const ps = frames[f].pos; const spread = Math.max(...ps) - Math.min(...ps);
+      if (spread > bestSpread) { bestSpread = spread; bestF = f; }
+    }
+    return {
+      laneOf, color, velNorm,
+      decisiveProgress: frames.length > 1 ? decisive / (frames.length - 1) : 0,
+      staticProgress: frames.length > 1 ? bestF / (frames.length - 1) : 0.45,
+    };
   }, [data, N, heroIndex, heroFinalRank]);
 
   const startRank = data.frames[0]?.rank[heroIndex] ?? heroFinalRank;
-  const heroState = useMemo(() => {
-    if (heroFinalRank === 1 && startRank === 1) return "wire to wire";
-    if (heroFinalRank <= startRank - 3) return "breaking from the pack";
-    if (heroFinalRank < startRank) return "moving up through the field";
-    if (heroFinalRank >= startRank + 2) return "swallowed by the field late";
-    return "holding its line";
-  }, [heroFinalRank, startRank]);
+  // Finishing order for the result payoff, from real finalRanking (pet ids in order).
+  const finishOrder = useMemo(() => data.finalRanking.map((id, i) => ({ place: i + 1, id })), [data.finalRanking]);
+  const winnerId = data.finalRanking[0] ?? null;
 
   const delta = modelRank != null ? modelRank - heroFinalRank : null;
   const verdict = useMemo(() => {
@@ -153,14 +167,14 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const layoutRef = useRef<Layout | null>(null);
-  const progressRef = useRef(view.decisiveProgress); // start on the decisive frame (a real, dramatic still)
+  const progressRef = useRef(0); // start at the gate; autoplay sweeps it across
   const rafRef = useRef<number | null>(null);
 
   const prevTsRef = useRef<number | null>(null);
   const hudThrottle = useRef(0);
   const [reduced, setReduced] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [hud, setHud] = useState({ liveRank: heroFinalRank, progress: view.decisiveProgress, tMs: 0 });
+  const [hud, setHud] = useState({ liveRank: startRank, progress: 0, tMs: 0, status: "breaking from the gate" });
 
   const sampleAt = useCallback((p: number) => {
     const frames = data.frames; const last = frames.length - 1;
@@ -288,17 +302,29 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       }
     }
 
-    // DOM HUD (live rank / time): forced on a discrete redraw, throttled to ~10/s in the play loop
-    const liveRank = frames[Math.round(fp)]?.rank[heroIndex] ?? heroFinalRank;
+    // DOM HUD: live rank, time, and a FRAME-ACCURATE status from the hero's recent rank
+    // trend, throttled to ~10/s in the play loop, forced on a discrete redraw.
+    const fi = Math.round(fp);
+    const liveRank = frames[fi]?.rank[heroIndex] ?? heroFinalRank;
+    const back = Math.max(0, fi - Math.max(2, Math.round(frames.length * 0.06)));
+    const backRank = frames[back]?.rank[heroIndex] ?? liveRank;
+    let status: string;
+    if (p < 0.04) status = "breaking from the gate";
+    else if (liveRank === 1) status = "in front";
+    else if (liveRank - backRank <= -1) status = "moving up";
+    else if (liveRank - backRank >= 1) status = "fading";
+    else status = "holding its line";
     const tMs = lerp(frames[i0].tMs, frames[i1].tMs);
     const now = performance.now();
-    if (forceHud || now - hudThrottle.current > 95) { hudThrottle.current = now; setHud({ liveRank, progress: p, tMs }); }
+    if (forceHud || now - hudThrottle.current > 95) { hudThrottle.current = now; setHud({ liveRank, progress: p, tMs, status }); }
   }, [data, sampleAt, view, heroIndex, heroFinalRank, hudThrottle]);
 
-  // size + dpr + initial paint (no continuous loop here; the loop runs only while playing)
+  // size + dpr + initial paint, then AUTOPLAY from the gate (reduced-motion gets a
+  // balanced mid-race still plus the result instead of motion). Runs once on mount.
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(mq.matches);
+    const isReduced = mq.matches;
+    setReduced(isReduced);
     const onMq = () => setReduced(mq.matches); mq.addEventListener("change", onMq);
 
     const wrap = wrapRef.current; const canvas = canvasRef.current; if (!wrap || !canvas) return;
@@ -311,20 +337,24 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       layoutRef.current = computeLayout(r.width, r.height, N);
       draw(true);
     };
+    if (isReduced) progressRef.current = view.staticProgress; // balanced spread frame
     resize();
     const ro = new ResizeObserver(resize); ro.observe(wrap);
+    if (!isReduced) setPlaying(true); // play itself on load, no user action
     return () => { ro.disconnect(); mq.removeEventListener("change", onMq); };
-  }, [N, draw]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Animation loop: active ONLY while playing, so a static/paused frame costs nothing.
+  // Progress advances with an eased velocity so the gun-break and the line breathe.
   useEffect(() => {
     if (!playing) { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = null; draw(true); return; }
     prevTsRef.current = null;
     const step = (ts: number) => {
       const prev = prevTsRef.current ?? ts; const dt = Math.min(64, ts - prev); prevTsRef.current = ts;
-      progressRef.current = Math.min(1, progressRef.current + dt / PLAY_MS);
+      progressRef.current = Math.min(1, progressRef.current + (dt / PLAY_MS) * vel(progressRef.current));
       draw();
-      if (progressRef.current >= 1) { setPlaying(false); return; }
+      if (progressRef.current >= 1) { progressRef.current = 1; draw(true); setPlaying(false); return; }
       rafRef.current = requestAnimationFrame(step);
     };
     rafRef.current = requestAnimationFrame(step);
@@ -336,12 +366,13 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
     setPlaying(true);
   };
   const onPause = () => setPlaying(false);
+  const onReplay = () => { progressRef.current = 0; setPlaying(true); };
   const onScrub = (v: number) => { progressRef.current = v; setPlaying(false); draw(true); };
 
   const atEnd = hud.progress >= 0.999;
-  const showRunning = !reduced && (playing || (!atEnd && hud.progress > 0.001));
-  const resultLabel = showRunning ? "RUNNING" : (data.finished ? "RESULT" : "POSITION");
-  const resultRank = showRunning ? hud.liveRank : heroFinalRank;
+  // The result resolves only at the finish; reduced-motion users see it immediately
+  // (static still + result). Mid-race shows the live running placing, never the result.
+  const showResult = atEnd || reduced;
 
   return (
     <div ref={wrapRef} className="relative w-full overflow-hidden rounded-xl" style={{ background: BG, height: "min(900px, 78vh)", minHeight: 540 }}>
@@ -362,12 +393,13 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
         <p className="type-micro mt-1 tracking-[0.18em] text-ink-faint">The Open Intelligence Layer</p>
       </div>
 
-      {/* hero telemetry panel (anchored left; leader line is drawn on the canvas) */}
+      {/* hero telemetry panel: frame-accurate. RUNNING + a live status until the finish,
+          then RESULT + the verdict. MODEL EXPECTED shows throughout. */}
       {heroIndex >= 0 && (
         <div className="pointer-events-none absolute left-7" style={{ top: "50%", transform: "translateY(-50%)", width: "min(248px, 20vw)" }}>
           <p className="type-micro uppercase tracking-[0.2em]" style={{ color: CYAN }}>{heroLabel}</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums" style={{ color: HERO_GLOW }}>#{heroPetId}</p>
-          <p className="type-micro mt-0.5 normal-case text-ink-soft">{heroState}</p>
+          <p className="type-micro mt-0.5 normal-case text-ink-soft">{showResult ? "result is in" : hud.status}</p>
 
           <div className="mt-4 space-y-1.5">
             {modelRank != null && (
@@ -377,29 +409,56 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
               </div>
             )}
             <div className="flex items-baseline gap-2">
-              <span className="type-micro uppercase tracking-wider text-ink-faint">{resultLabel}</span>
-              <span className="text-lg font-semibold tabular-nums" style={{ color: GOLD }}>{ordinal(resultRank)}</span>
+              <span className="type-micro uppercase tracking-wider text-ink-faint">{showResult ? "Result" : "Running"}</span>
+              <span className="text-lg font-semibold tabular-nums" style={{ color: showResult ? GOLD : HERO_CORE }}>{ordinal(showResult ? heroFinalRank : hud.liveRank)}</span>
             </div>
-            <p className="type-micro normal-case text-ink-soft">{verdict}</p>
+            {showResult && <p className="type-micro normal-case text-ink-soft">{verdict}</p>}
           </div>
         </div>
       )}
 
-      {/* controls */}
-      <div className="absolute inset-x-7 bottom-4 flex items-center gap-3">
-        {!reduced ? (
-          <button
-            type="button"
-            onClick={playing ? onPause : onPlay}
-            aria-label={playing ? "Pause replay" : "Play replay"}
-            className="transition-paddock inline-flex h-8 w-8 items-center justify-center rounded-full border text-ink-soft hover:text-ink"
-            style={{ borderColor: "var(--line-strong)" }}
-          >
-            {playing ? "❙❙" : "▶"}
-          </button>
-        ) : (
-          <span className="type-micro uppercase tracking-wider text-ink-faint">Decisive frame</span>
+      {/* RESULT payoff: fades in at the finish (and for reduced motion). WON BY + the real
+          finishing order, the spotlight runner in brick, plus a Replay. */}
+      <div
+        className="absolute right-7 transition-opacity duration-500"
+        style={{ top: "46%", transform: "translateY(-50%)", width: "min(230px, 22vw)", opacity: showResult ? 1 : 0, pointerEvents: showResult ? "auto" : "none" }}
+        aria-hidden={!showResult}
+      >
+        <p className="type-micro uppercase tracking-[0.2em] text-right" style={{ color: GOLD }}>Result</p>
+        {winnerId != null && (
+          <p className="mt-1 text-right font-serif text-2xl leading-none" style={{ color: winnerId === heroPetId ? HERO_GLOW : GOLD }}>
+            Won by #{winnerId}
+          </p>
         )}
+        <ol className="mt-3 space-y-1">
+          {finishOrder.map((f) => (
+            <li key={f.id} className="flex items-baseline justify-end gap-2 tabular-nums">
+              <span className="type-micro uppercase tracking-wider text-ink-faint">{ordinal(f.place)}</span>
+              <span className="type-data" style={{ color: f.id === heroPetId ? HERO_GLOW : "var(--ink-soft)" }}>#{f.id}</span>
+            </li>
+          ))}
+        </ol>
+        <button
+          type="button"
+          onClick={onReplay}
+          className="transition-paddock mt-4 ml-auto block rounded-md border px-3 py-1.5 text-ink-soft hover:border-glow hover:text-glow"
+          style={{ borderColor: "var(--line-strong)" }}
+        >
+          <span className="type-micro uppercase tracking-wider">Replay ↺</span>
+        </button>
+      </div>
+
+      {/* controls: play/pause + scrubber, always visible (the replay plays itself by default) */}
+      <div className="absolute inset-x-7 bottom-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={atEnd ? onReplay : (playing ? onPause : onPlay)}
+          aria-label={atEnd ? "Replay" : (playing ? "Pause replay" : "Play replay")}
+          className="transition-paddock inline-flex h-8 w-8 items-center justify-center rounded-full border text-ink-soft hover:text-ink hover:border-line-strong"
+          style={{ borderColor: "var(--line-strong)" }}
+        >
+          {atEnd ? "↺" : (playing ? "❙❙" : "▶")}
+        </button>
         <input
           type="range" min={0} max={1000} value={Math.round(hud.progress * 1000)}
           onChange={(e) => onScrub(Number(e.target.value) / 1000)}
