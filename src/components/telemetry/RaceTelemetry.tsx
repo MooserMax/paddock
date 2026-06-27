@@ -154,6 +154,12 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
   // Finishing order for the result payoff, from real finalRanking (pet ids in order).
   const finishOrder = useMemo(() => data.finalRanking.map((id, i) => ({ place: i + 1, id })), [data.finalRanking]);
   const winnerId = data.finalRanking[0] ?? null;
+  // pet id -> its runner color, so the result list color-matches the figures on the track.
+  const colorById = useMemo(() => {
+    const m = new Map<number, string>();
+    data.pets.forEach((p, i) => m.set(p.id, view.color[i]));
+    return m;
+  }, [data.pets, view.color]);
 
   const delta = modelRank != null ? modelRank - heroFinalRank : null;
   const verdict = useMemo(() => {
@@ -227,9 +233,11 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
     ctx.restore();
 
     // --- runners (field first, hero last on top) ---
+    const ended = p >= 0.999; // at the finish: show finishing-order badges
     const order = data.pets.map((_, i) => i).sort((a, b) => (a === heroIndex ? 1 : 0) - (b === heroIndex ? 1 : 0));
     for (const i of order) {
       const isHero = i === heroIndex;
+      const petId = data.pets[i].id; const finalRank = data.pets[i].finalRank;
       const meters = lerp(frames[i0].pos[i], frames[i1].pos[i]);
       const x = xOf(meters); const y = laneY(view.laneOf[i]);
       const h = L.figureH * (isHero ? HERO_RATIO / FIELD_RATIO : 1);
@@ -281,16 +289,37 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       }
       ctx.restore();
 
-      if (isHero) {
-        // leader line from the telemetry panel to the hero, plus a tasteful flare at the
-        // decisive tick (a real, earned moment, not constant decoration)
-        const anchorY = Math.max(L.trackTop + 30, Math.min(L.trackBottom - 30, y));
-        ctx.save();
-        ctx.strokeStyle = "rgba(111,214,236,0.45)"; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(L.padX + L.panelW, anchorY); ctx.lineTo(x - h * 0.5, y); ctx.stroke();
-        ctx.fillStyle = CYAN; ctx.beginPath(); ctx.arc(x - h * 0.5, y, 1.8, 0, Math.PI * 2); ctx.fill();
-        ctx.restore();
+      // #id label tucked into the clear space above each figure (Fix 3). Identifies every
+      // runner; the spotlight is brick and emphasized. NO line crosses the lanes (Fix 2).
+      const labelFs = Math.max(9, h * 0.32);
+      ctx.save();
+      ctx.font = `${isHero ? 700 : 500} ${labelFs}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+      ctx.shadowColor = "rgba(0,0,0,0.9)"; ctx.shadowBlur = 3;
+      ctx.fillStyle = isHero ? HERO_GLOW : color; ctx.globalAlpha = isHero ? 1 : 0.6;
+      ctx.fillText(isHero ? `#${petId} YOU` : `#${petId}`, x, headY - headR - labelFs * 0.45);
+      ctx.restore();
 
+      // finishing-order badge on the podium and the spotlight, only at the finish (Fix 4):
+      // a small numbered disc left of the figure, the winner gold with a crown.
+      if (ended && (finalRank <= 3 || isHero)) {
+        const bx = x - h * 0.9, by = headY + h * 0.05, br = Math.max(7, h * 0.36);
+        const isWin = finalRank === 1;
+        const bcol = isWin ? GOLD : isHero ? HERO_GLOW : finalRank === 2 ? "#c9d2dc" : "#cf9b6a";
+        ctx.save();
+        ctx.shadowColor = bcol; ctx.shadowBlur = 6;
+        ctx.fillStyle = "rgba(11,10,9,0.92)"; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0; ctx.lineWidth = 1.4; ctx.strokeStyle = bcol; ctx.stroke();
+        ctx.fillStyle = bcol; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = `700 ${br * 1.05}px ui-monospace, monospace`;
+        ctx.fillText(String(finalRank), bx, by + 0.5);
+        ctx.restore();
+        if (isWin) { ctx.save(); ctx.fillStyle = GOLD; ctx.textAlign = "center"; ctx.font = `${br * 1.4}px serif`; ctx.fillText("♔", bx, by - br - 1); ctx.restore(); }
+      }
+
+      if (isHero) {
+        // a tasteful flare at the decisive tick (an earned moment, not decoration). The
+        // spotlight is identified by its warm color, label, and the left panel, not a line.
         const flare = Math.exp(-Math.pow((p - view.decisiveProgress) / 0.05, 2));
         if (flare > 0.02) {
           const rad = h * (1.4 + 2.6 * flare);
@@ -337,13 +366,20 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       layoutRef.current = computeLayout(r.width, r.height, N);
       draw(true);
     };
-    if (isReduced) progressRef.current = view.staticProgress; // balanced spread frame
+    // DETERMINISTIC reset on every mount: force progress to the gate (or a balanced spread
+    // still for reduced motion), reset the HUD so the result is hidden, then autoplay.
+    // The decisive-frame value is never the initial progress; nothing can leave it parked.
+    progressRef.current = isReduced ? view.staticProgress : 0;
+    prevTsRef.current = null;
+    setHud({ liveRank: startRank, progress: progressRef.current, tMs: 0, status: "breaking from the gate" });
+    setPlaying(false);
     resize();
     const ro = new ResizeObserver(resize); ro.observe(wrap);
     if (!isReduced) setPlaying(true); // play itself on load, no user action
     return () => { ro.disconnect(); mq.removeEventListener("change", onMq); };
+  // re-arm on a race change too, so a reused instance never keeps the prior race state
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [data.raceId]);
 
   // Animation loop: active ONLY while playing, so a static/paused frame costs nothing.
   // Progress advances with an eased velocity so the gun-break and the line breathe.
@@ -433,8 +469,9 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
         <ol className="mt-3 space-y-1">
           {finishOrder.map((f) => (
             <li key={f.id} className="flex items-baseline justify-end gap-2 tabular-nums">
+              {f.place === 1 && <span aria-hidden style={{ color: GOLD }}>♔</span>}
               <span className="type-micro uppercase tracking-wider text-ink-faint">{ordinal(f.place)}</span>
-              <span className="type-data" style={{ color: f.id === heroPetId ? HERO_GLOW : "var(--ink-soft)" }}>#{f.id}</span>
+              <span className="type-data" style={{ color: f.id === heroPetId ? HERO_GLOW : f.place === 1 ? GOLD : colorById.get(f.id) ?? "var(--ink-soft)" }}>#{f.id}</span>
             </li>
           ))}
         </ol>

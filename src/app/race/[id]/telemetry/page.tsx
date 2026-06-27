@@ -68,7 +68,7 @@ export default async function TelemetryPage(props: { params: Promise<{ id: strin
         <Link href={`/race/${raceId}`} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Back to recap</Link>
         <Link href={`/api/v1/race/${raceId}/telemetry`} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Served by /api/v1/race/{raceId}/telemetry</Link>
       </div>
-      <RaceTelemetry data={data} heroPetId={heroId} heroLabel={heroLabel} modelRank={modelRank} raceTitle={`Race #${raceId}`} />
+      <RaceTelemetry key={`tel-${raceId}`} data={data} heroPetId={heroId} heroLabel={heroLabel} modelRank={modelRank} raceTitle={`Race #${raceId}`} />
     </div>
   );
 }
