@@ -154,9 +154,7 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const layoutRef = useRef<Layout | null>(null);
   const progressRef = useRef(view.decisiveProgress); // start on the decisive frame (a real, dramatic still)
-  const playingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
-  const lastTsRef = useRef(0);
 
   const prevTsRef = useRef<number | null>(null);
   const hudThrottle = useRef(0);
@@ -171,7 +169,7 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
     return { i0, i1, t, fp };
   }, [data.frames]);
 
-  const draw = useCallback(() => {
+  const draw = useCallback((forceHud = false) => {
     const canvas = canvasRef.current; const L = layoutRef.current; if (!canvas || !L) return;
     const ctx = canvas.getContext("2d"); if (!ctx) return;
     const frames = data.frames; const p = progressRef.current;
@@ -290,30 +288,14 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       }
     }
 
-    // throttle DOM HUD updates (live rank / time) to ~10 per second
-    const now = lastTsRef.current;
+    // DOM HUD (live rank / time): forced on a discrete redraw, throttled to ~10/s in the play loop
     const liveRank = frames[Math.round(fp)]?.rank[heroIndex] ?? heroFinalRank;
     const tMs = lerp(frames[i0].tMs, frames[i1].tMs);
-    if (now - hudThrottle.current > 95) { hudThrottle.current = now; setHud({ liveRank, progress: p, tMs }); }
-  }, [data, sampleAt, view, heroIndex, heroFinalRank, hudThrottle, lastTsRef]);
+    const now = performance.now();
+    if (forceHud || now - hudThrottle.current > 95) { hudThrottle.current = now; setHud({ liveRank, progress: p, tMs }); }
+  }, [data, sampleAt, view, heroIndex, heroFinalRank, hudThrottle]);
 
-  // animation loop
-  const tick = useCallback((ts: number) => {
-    lastTsRef.current = ts;
-    if (playingRef.current) {
-      const prev = prevTsRef.current ?? ts;
-      const dt = Math.min(64, ts - prev);
-      prevTsRef.current = ts;
-      progressRef.current = Math.min(1, progressRef.current + dt / PLAY_MS);
-      if (progressRef.current >= 1) { playingRef.current = false; setPlaying(false); }
-    } else {
-      prevTsRef.current = null;
-    }
-    draw();
-    rafRef.current = requestAnimationFrame(tick);
-  }, [draw]);
-
-  // size + dpr + start loop
+  // size + dpr + initial paint (no continuous loop here; the loop runs only while playing)
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     setReduced(mq.matches);
@@ -327,20 +309,34 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       canvas.style.width = `${r.width}px`; canvas.style.height = `${r.height}px`;
       const ctx = canvas.getContext("2d"); if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       layoutRef.current = computeLayout(r.width, r.height, N);
-      draw();
+      draw(true);
     };
     resize();
     const ro = new ResizeObserver(resize); ro.observe(wrap);
-    rafRef.current = requestAnimationFrame(tick);
-    return () => { ro.disconnect(); mq.removeEventListener("change", onMq); if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [N, draw, tick]);
+    return () => { ro.disconnect(); mq.removeEventListener("change", onMq); };
+  }, [N, draw]);
+
+  // Animation loop: active ONLY while playing, so a static/paused frame costs nothing.
+  useEffect(() => {
+    if (!playing) { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = null; draw(true); return; }
+    prevTsRef.current = null;
+    const step = (ts: number) => {
+      const prev = prevTsRef.current ?? ts; const dt = Math.min(64, ts - prev); prevTsRef.current = ts;
+      progressRef.current = Math.min(1, progressRef.current + dt / PLAY_MS);
+      draw();
+      if (progressRef.current >= 1) { setPlaying(false); return; }
+      rafRef.current = requestAnimationFrame(step);
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = null; };
+  }, [playing, draw]);
 
   const onPlay = () => {
     if (progressRef.current >= 0.999) progressRef.current = 0; // replay from the gate
-    prevTsRef.current = null; playingRef.current = true; setPlaying(true);
+    setPlaying(true);
   };
-  const onPause = () => { playingRef.current = false; setPlaying(false); };
-  const onScrub = (v: number) => { progressRef.current = v; playingRef.current = false; setPlaying(false); draw(); };
+  const onPause = () => setPlaying(false);
+  const onScrub = (v: number) => { progressRef.current = v; setPlaying(false); draw(true); };
 
   const atEnd = hud.progress >= 0.999;
   const showRunning = !reduced && (playing || (!atEnd && hud.progress > 0.001));
