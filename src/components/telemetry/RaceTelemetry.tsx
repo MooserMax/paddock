@@ -135,18 +135,9 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
     // decisive moment: first frame the hero holds its final rank (used only for the flare)
     let decisive = 0;
     if (heroIndex >= 0) { for (let f = 0; f < frames.length; f++) { if (frames[f].rank[heroIndex] === heroFinalRank) { decisive = f; break; } } }
-    // balanced static still: the most strung-out frame in the middle of the race, so a
-    // reduced-motion or share frame shows runners SPREAD, never piled at the line.
-    let bestSpread = -1, bestF = Math.floor(frames.length * 0.45);
-    const lo = Math.floor(frames.length * 0.3), hi = Math.floor(frames.length * 0.72);
-    for (let f = lo; f <= hi && f < frames.length; f++) {
-      const ps = frames[f].pos; const spread = Math.max(...ps) - Math.min(...ps);
-      if (spread > bestSpread) { bestSpread = spread; bestF = f; }
-    }
     return {
       laneOf, color, velNorm,
       decisiveProgress: frames.length > 1 ? decisive / (frames.length - 1) : 0,
-      staticProgress: frames.length > 1 ? bestF / (frames.length - 1) : 0.45,
     };
   }, [data, N, heroIndex, heroFinalRank]);
 
@@ -178,7 +169,10 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
 
   const prevTsRef = useRef<number | null>(null);
   const hudThrottle = useRef(0);
-  const [reduced, setReduced] = useState(false);
+  // prefers-reduced-motion NEVER gates autoplay or progress. It is read only to tone down
+  // purely decorative motion (the decisive flare and the speed-surge pulse). Kept in a ref
+  // so it can never become a render branch that parks the playhead.
+  const reducedRef = useRef(false);
   const [playing, setPlaying] = useState(false);
   const [hud, setHud] = useState({ liveRank: startRank, progress: 0, tMs: 0, status: "breaking from the gate" });
 
@@ -246,8 +240,11 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       const color = view.color[i];
       const core = isHero ? HERO_CORE : color;
 
-      // trail: a tapered light streak behind the runner at body height
-      const trailLen = h * (1.1 + 5.4 * vN) * (isHero ? 1.25 : 1) * (0.85 + 0.4 * Math.max(0, surge - 1));
+      // trail: a tapered light streak behind the runner at body height. The speed-surge
+      // pulse is decorative, so reduced-motion users get a steady trail (position/velocity,
+      // which are information, are kept).
+      const surgeBoost = reducedRef.current ? 0 : 0.4 * Math.max(0, surge - 1);
+      const trailLen = h * (1.1 + 5.4 * vN) * (isHero ? 1.25 : 1) * (0.85 + surgeBoost);
       const nearW = h * (isHero ? 0.18 : 0.14);
       const tg = ctx.createLinearGradient(x, y, x - trailLen, y);
       tg.addColorStop(0, color); tg.addColorStop(1, "rgba(0,0,0,0)");
@@ -317,9 +314,10 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
         if (isWin) { ctx.save(); ctx.fillStyle = GOLD; ctx.textAlign = "center"; ctx.font = `${br * 1.4}px serif`; ctx.fillText("♔", bx, by - br - 1); ctx.restore(); }
       }
 
-      if (isHero) {
-        // a tasteful flare at the decisive tick (an earned moment, not decoration). The
-        // spotlight is identified by its warm color, label, and the left panel, not a line.
+      if (isHero && !reducedRef.current) {
+        // a tasteful flare at the decisive tick (an earned moment, decoration only, so it is
+        // suppressed for reduced motion). The spotlight is identified by its warm color and
+        // label regardless.
         const flare = Math.exp(-Math.pow((p - view.decisiveProgress) / 0.05, 2));
         if (flare > 0.02) {
           const rad = h * (1.4 + 2.6 * flare);
@@ -348,13 +346,13 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
     if (forceHud || now - hudThrottle.current > 95) { hudThrottle.current = now; setHud({ liveRank, progress: p, tMs, status }); }
   }, [data, sampleAt, view, heroIndex, heroFinalRank, hudThrottle]);
 
-  // size + dpr + initial paint, then AUTOPLAY from the gate (reduced-motion gets a
-  // balanced mid-race still plus the result instead of motion). Runs once on mount.
+  // size + dpr + initial paint, then AUTOPLAY from the gate for EVERYONE. prefers-reduced-
+  // motion does NOT change progress or autoplay; it only dampens decorative motion (read in
+  // draw via reducedRef). Runs on mount and re-arms on a race change.
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const isReduced = mq.matches;
-    setReduced(isReduced);
-    const onMq = () => setReduced(mq.matches); mq.addEventListener("change", onMq);
+    reducedRef.current = mq.matches; // decoration toggle only, never a play/progress gate
+    const onMq = () => { reducedRef.current = mq.matches; }; mq.addEventListener("change", onMq);
 
     const wrap = wrapRef.current; const canvas = canvasRef.current; if (!wrap || !canvas) return;
     const resize = () => {
@@ -366,16 +364,16 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       layoutRef.current = computeLayout(r.width, r.height, N);
       draw(true);
     };
-    // DETERMINISTIC reset on every mount: force progress to the gate (or a balanced spread
-    // still for reduced motion), reset the HUD so the result is hidden, then autoplay.
-    // The decisive-frame value is never the initial progress; nothing can leave it parked.
-    progressRef.current = isReduced ? view.staticProgress : 0;
+    // DETERMINISTIC reset on every mount, identical for reduced motion and not: progress to
+    // the gate (literally 0), result hidden, then autoplay. No branch ever sets progress to
+    // the static/decisive frame; the only writers are the rAF loop and the user scrubber.
+    progressRef.current = 0;
     prevTsRef.current = null;
-    setHud({ liveRank: startRank, progress: progressRef.current, tMs: 0, status: "breaking from the gate" });
+    setHud({ liveRank: startRank, progress: 0, tMs: 0, status: "breaking from the gate" });
     setPlaying(false);
     resize();
     const ro = new ResizeObserver(resize); ro.observe(wrap);
-    if (!isReduced) setPlaying(true); // play itself on load, no user action
+    setPlaying(true); // play itself on load for ALL users, no user action
     return () => { ro.disconnect(); mq.removeEventListener("change", onMq); };
   // re-arm on a race change too, so a reused instance never keeps the prior race state
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -406,9 +404,9 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
   const onScrub = (v: number) => { progressRef.current = v; setPlaying(false); draw(true); };
 
   const atEnd = hud.progress >= 0.999;
-  // The result resolves only at the finish; reduced-motion users see it immediately
-  // (static still + result). Mid-race shows the live running placing, never the result.
-  const showResult = atEnd || reduced;
+  // The result resolves ONLY at the finish, for every user including reduced motion. It is
+  // never shown on load; the race always plays from the gate first.
+  const showResult = atEnd;
 
   return (
     <div ref={wrapRef} className="relative w-full overflow-hidden rounded-xl" style={{ background: BG, height: "min(900px, 78vh)", minHeight: 540 }}>
@@ -453,7 +451,7 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
         </div>
       )}
 
-      {/* RESULT payoff: fades in at the finish (and for reduced motion). WON BY + the real
+      {/* RESULT payoff: fades in at the finish only (never on load). WON BY + the real
           finishing order, the spotlight runner in brick, plus a Replay. */}
       <div
         className="absolute right-7 transition-opacity duration-500"
