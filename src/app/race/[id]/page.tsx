@@ -43,9 +43,16 @@ export default async function RacePage(
           <p className="eyebrow">Scanner verdict</p>
           <h1 className="type-page-title text-ink">Race #{race.raceId}</h1>
         </div>
-        <Link href="/scanner" className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">
-          Scan another race
-        </Link>
+        <div className="flex items-center gap-4">
+          {race.resolved && (
+            <Link href={`/race/${race.raceId}/telemetry`} className="type-micro uppercase tracking-wider transition-paddock hover:text-glow" style={{ color: "var(--glow)" }}>
+              Race telemetry
+            </Link>
+          )}
+          <Link href="/scanner" className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">
+            Scan another race
+          </Link>
+        </div>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">

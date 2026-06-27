@@ -488,6 +488,35 @@ export interface LiveRacesResponse {
   meta: { source: string };
 }
 
+// Race telemetry: per-tick resolver frames for the side-scroll visualization. All
+// arrays are keyed by raceResult.pets[] INDEX (the Gigaverse tick keying), preserved here.
+export interface TelemetryPet {
+  id: number;
+  finalRank: number;
+}
+export interface TelemetryFrame {
+  tMs: number; // ms from race start (raceBeginsAt + tMs = wall clock)
+  pos: number[]; // meters per pet (by index)
+  spd: number[]; // speed multiplier per pet (by index)
+  rank: number[]; // 1..numPets per pet (by index)
+}
+export interface RaceTelemetryData {
+  raceId: number;
+  trackLength: number;
+  secondsPerTick: number;
+  numPets: number;
+  finished: boolean;
+  phase: number;
+  raceBeginsAt: number;
+  pets: TelemetryPet[]; // index = tick keying
+  finalRanking: number[]; // pet ids in finishing order
+  msFinishTimes: number[];
+  frames: TelemetryFrame[]; // downsampled, ordered by time
+  totalTicks: number;
+  sampleEvery: number;
+  source: string;
+}
+
 export type RecordMode = "raw" | "adjusted";
 export type RecordWindow = "all" | "weekly" | "daily";
 
