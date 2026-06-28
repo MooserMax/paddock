@@ -5,8 +5,10 @@ import WalletSearch from "@/components/WalletSearch";
 import GettingStarted from "@/components/home/GettingStarted";
 import RarityBadge from "@/components/RarityBadge";
 import RecentWins from "@/components/home/RecentWins";
+import GlobalStats from "@/components/home/GlobalStats";
 import { getRecentWins } from "@/lib/api/queries";
-import { formatEth, formatInt, formatScore, formatPct } from "@/lib/format";
+import { fetchGigaStats, type GigaStats } from "@/lib/telemetry";
+import { formatScore, formatPct } from "@/lib/format";
 
 export const revalidate = 60;
 
@@ -14,8 +16,9 @@ export default async function Home() {
   let stats: SiteStats | null = null;
   let board: LeaderboardResponse | null = null;
   let recentWins: RecentWinsResponse = { wins: [], ethUsd: null, fetchedAt: new Date().toISOString() };
+  let giga: GigaStats | null = null;
   try {
-    [stats, board, recentWins] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12)]);
+    [stats, board, recentWins, giga] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats()]);
   } catch {
     // The hero still renders without live numbers; never a blank crash.
   }
@@ -39,22 +42,11 @@ export default async function Home() {
 
           {/* Getting-started guide: what to do, one tile per feature. */}
           <GettingStarted />
-
-          {stats && (
-            <div className="assemble mt-10 flex flex-wrap items-center gap-x-8 gap-y-3" style={{ animationDelay: "160ms" }} aria-label="Live coverage">
-              <LiveStat value={formatInt(stats.racesResolved)} label="races resolved" pulse />
-              <LiveStat value={formatInt(stats.totalPets)} label="Giglings tracked" />
-              <LiveStat value={formatInt(stats.hatchedPets)} label="hatched racers" />
-              {stats.recentBigSale && <LiveStat value={formatEth(stats.recentBigSale.priceEth, 3)} label="top recent sale" />}
-            </div>
-          )}
-          {stats && stats.racesAbandoned > 0 && (
-            <p className="assemble type-micro mt-3 normal-case text-ink-faint" style={{ animationDelay: "200ms" }}>
-              That is races that actually ran. A further {formatInt(stats.racesAbandoned)} were created but never drew enough entrants to start, so we count them separately rather than inflate the total.
-            </p>
-          )}
         </div>
       </section>
+
+      {/* Global Stats showcase: the macro numbers, screenshottable, self-branding. */}
+      <GlobalStats site={stats} giga={giga} itemStats={null} />
 
       {/* Recent paid-race wins: live money moving, the social proof slot. */}
       <RecentWins initial={recentWins} />
@@ -95,12 +87,3 @@ export default async function Home() {
   );
 }
 
-function LiveStat({ value, label, pulse = false }: { value: string; label: string; pulse?: boolean }) {
-  return (
-    <div className="flex items-center gap-2">
-      {pulse && <span className="inline-block h-1.5 w-1.5 rounded-full animate-pulse-soft" style={{ background: "var(--green)" }} aria-hidden />}
-      <span className="type-data tabular-nums text-ink">{value}</span>
-      <span className="type-micro uppercase text-ink-faint">{label}</span>
-    </div>
-  );
-}

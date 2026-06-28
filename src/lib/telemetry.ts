@@ -118,22 +118,50 @@ function transform(raceId: number, body: TickResponse): RaceTelemetryData {
   };
 }
 
-// Public global racing aggregates (server-side fetch, like the tick read). Real numbers
-// only; there is no item-consumption total here, so we never claim one. Null on failure.
+// Public global racing aggregates (server-side fetch, cached). Real numbers only; there
+// is no item-consumption total here, so we never claim one. jackpotWins is honestly 0
+// until one is won; jackpotPoolWei is the CURRENT unclaimed pool read from a recent race
+// detail (the pool is global, so any recent race carries it). Null on failure.
 export interface GigaStats {
   totalRacesCreated: number;
+  racesResolved: number;
   totalEntries: number;
   uniqueRacers: number;
+  uniqueCreators: number;
   totalEntryFeeVolumeWei: string;
+  jackpotWins: number;
+  jackpotPoolWei: string | null;
+}
+interface RawStats {
+  totalRacesCreated: number; totalEntries: number; uniqueRacers: number; uniqueCreators: number;
+  totalEntryFeeVolumeWei: string; totalJackpotWinsCount: number; racesByPhase?: Record<string, number>;
 }
 export async function fetchGigaStats(): Promise<GigaStats | null> {
   try {
     const res = await fetch(STATS_URL, { headers: { accept: "application/json" }, next: { revalidate: 600 } });
     if (!res.ok) return null;
-    const body = (await res.json()) as { success?: boolean; data?: GigaStats };
+    const body = (await res.json()) as { success?: boolean; data?: RawStats };
     if (!body.success || !body.data) return null;
     const d = body.data;
-    return { totalRacesCreated: d.totalRacesCreated, totalEntries: d.totalEntries, uniqueRacers: d.uniqueRacers, totalEntryFeeVolumeWei: d.totalEntryFeeVolumeWei };
+    // Live jackpot pool from a recent race detail (best-effort; null if unavailable).
+    let jackpotPoolWei: string | null = null;
+    try {
+      const r2 = await fetch(`${TICK_BASE}/${d.totalRacesCreated - 1}`, { headers: { accept: "application/json" }, next: { revalidate: 600 } });
+      if (r2.ok) {
+        const jr = (await r2.json()) as { jackpot?: { balance?: string } };
+        jackpotPoolWei = jr.jackpot?.balance ?? null;
+      }
+    } catch { /* pool simply omitted */ }
+    return {
+      totalRacesCreated: d.totalRacesCreated,
+      racesResolved: d.racesByPhase?.["3"] ?? 0,
+      totalEntries: d.totalEntries,
+      uniqueRacers: d.uniqueRacers,
+      uniqueCreators: d.uniqueCreators,
+      totalEntryFeeVolumeWei: d.totalEntryFeeVolumeWei,
+      jackpotWins: d.totalJackpotWinsCount ?? 0,
+      jackpotPoolWei,
+    };
   } catch {
     return null;
   }
