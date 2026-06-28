@@ -1,8 +1,9 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { fetchRaceTelemetry, TelemetryUnavailable } from "@/lib/telemetry";
+import { fetchRaceTelemetry, fetchGigaStats, TelemetryUnavailable } from "@/lib/telemetry";
 import { api } from "@/lib/api/client";
+import { formatEth } from "@/lib/format";
 import RaceTelemetry from "@/components/telemetry/RaceTelemetry";
 
 export const revalidate = 86400; // resolved telemetry is immutable
@@ -62,6 +63,7 @@ export default async function TelemetryPage(props: { params: Promise<{ id: strin
   // The component decides "your runner" vs "spotlight" from real ownership client-side, so
   // we pass the whole predicted-rank map (it can score whichever horse becomes the spotlight).
   const modelRanks = Object.fromEntries(modelRankByPet);
+  const stats = await fetchGigaStats(); // public global aggregates, server-side; null on failure
 
   return (
     <div className="mx-auto max-w-[1440px] px-3 py-6 md:px-6 md:py-8">
@@ -70,6 +72,11 @@ export default async function TelemetryPage(props: { params: Promise<{ id: strin
         <Link href={`/api/v1/race/${raceId}/telemetry`} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Served by /api/v1/race/{raceId}/telemetry</Link>
       </div>
       <RaceTelemetry key={`tel-${raceId}`} data={data} heroPetId={heroId} modelRanks={modelRanks} raceTitle={`Race #${raceId}`} />
+      {stats && (
+        <p className="type-micro mt-4 normal-case text-ink-faint">
+          Gigaverse racing, all time: {stats.totalRacesCreated.toLocaleString("en-US")} races, {stats.totalEntries.toLocaleString("en-US")} entries, {stats.uniqueRacers.toLocaleString("en-US")} racers, {formatEth(Number(stats.totalEntryFeeVolumeWei) / 1e18, 2)} entry-fee volume.
+        </p>
+      )}
     </div>
   );
 }

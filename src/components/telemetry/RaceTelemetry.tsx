@@ -1,9 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import type { RaceTelemetryData } from "@/lib/api/types";
+import type { RaceTelemetryData, TelemetryItem } from "@/lib/api/types";
 import { ordinal } from "@/lib/format";
 import { useWalletAddress } from "@/lib/walletFlag";
+
+// itemId -> name is NOT resolvable (the Gigaverse items catalog is auth-gated), so this map
+// stays empty and the UI shows "Item #<id>" with the observed boost/drag. Never guess a name.
+const ITEM_NAMES: Record<number, string> = {};
+const itemLabel = (id: number) => ITEM_NAMES[id] ?? `Item #${id}`;
+// Effect from the measured speedMultiplier at the applied tick: 1.1 = +10 percent boost,
+// below 1.0 = a drag. A refunded item had no effect.
+function itemEffect(it: TelemetryItem): string {
+  if (it.refundedAt != null) return "refunded, no effect";
+  if (it.boost == null) return "applied";
+  const pct = Math.round((it.boost - 1) * 100);
+  return pct > 0 ? `+${pct} percent boost` : pct < 0 ? `${pct} percent drag` : "applied";
+}
 
 // RACE TELEMETRY: a restrained, side-scroll race visualization rendered from real
 // per-tick data. Camera from the side; one lane per runner; x = real meters / track
@@ -515,6 +528,24 @@ export default function RaceTelemetry({ data, heroPetId, modelRanks, raceTitle }
             </li>
           ))}
         </ol>
+        {/* ITEMS: only when this race actually used items (most do not). Real scheduledItems,
+            labeled Item #<id> (catalog gated) with the measured boost/drag and refunds flagged. */}
+        {data.items.length > 0 && (
+          <div className="mx-auto mt-4 max-w-[320px] border-t pt-3 text-left" style={{ borderColor: "var(--line)" }}>
+            <p className="type-micro text-center uppercase tracking-wider text-ink-faint">{data.items.length} item{data.items.length > 1 ? "s" : ""} used</p>
+            <ul className="mt-1.5 space-y-1">
+              {data.items.map((it, i) => {
+                const mine = myPetIds.has(it.petId) || it.petId === effectiveHeroId;
+                return (
+                  <li key={i} className="type-micro normal-case" style={{ color: it.refundedAt != null ? "var(--ink-faint)" : "var(--ink-soft)" }}>
+                    {itemLabel(it.itemId)} on <span style={{ color: mine ? HERO_GLOW : colorById.get(it.petId) ?? "var(--ink-soft)" }}>#{it.petId}</span>
+                    {" · "}{itemEffect(it)}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
         <button
           type="button"
           onClick={onReplay}

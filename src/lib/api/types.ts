@@ -503,6 +503,21 @@ export interface TelemetryFrame {
   spd: number[]; // speed multiplier per pet (by index)
   rank: number[]; // 1..numPets per pet (by index)
 }
+// An item scheduled against a race (from the tick payload's scheduledItems). appliedAt set
+// with refundedAt null means it FIRED; refundedAt set means it was refunded and had no
+// effect. boost is the target pet's speedMultiplier at the applied tick (the measured effect),
+// null when refunded or unmeasurable. Names are not resolvable (catalog is auth-gated), so the
+// UI shows "Item #<id>" with the observed boost/drag direction.
+export interface TelemetryItem {
+  itemId: number;
+  petId: number;
+  amount: number;
+  atTick: number;
+  submittedBy: string | null;
+  appliedAt: number | null;
+  refundedAt: number | null;
+  boost: number | null; // speedMultiplier at atTick for the target pet (1.1 = +10 percent)
+}
 export interface RaceTelemetryData {
   raceId: number;
   trackLength: number;
@@ -515,6 +530,7 @@ export interface RaceTelemetryData {
   finalRanking: number[]; // pet ids in finishing order
   msFinishTimes: number[];
   frames: TelemetryFrame[]; // downsampled, ordered by time
+  items: TelemetryItem[]; // scheduledItems used in this race (empty for most races)
   totalTicks: number;
   sampleEvery: number;
   source: string;
