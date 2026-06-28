@@ -1,7 +1,6 @@
 import { db } from "../db";
 import { getSyncState, setSyncState } from "../syncState";
 import { latestBlock } from "../chain";
-import { REQUEST_GAP_MS } from "../gigaverse";
 import {
   ITEM_MARKET_DEPLOY_BLOCK,
   TOPIC_LISTING_CREATED,
@@ -27,7 +26,6 @@ export const ITEM_STATS_KEY = "item_stats_v1";
 export const ITEM_LEADERBOARD_KEY = "item_leaderboard_v1";
 
 const CHUNK = 9000n; // <= 9k blocks per getLogs; fetchItemLogs halves further on the 10k cap
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface ListingPrice { price: bigint; itemId: number }
 
@@ -86,13 +84,10 @@ export async function indexItemSpend(from: bigint, to: bigint, budgetMs: number)
     if (purchaseLogs.length) {
       const decoded = purchaseLogs.map(decodePurchase);
       const priceMap = await loadListingPrices([...new Set(decoded.map((p) => p.listingId))]);
-      const tsMap = new Map<number, number | null>();
-      for (const b of new Set(decoded.map((p) => p.blockNumber))) tsMap.set(b, await blockTimestamp(b));
       const rows = decoded.map((p) => {
         const L = priceMap.get(p.listingId);
         const spend = L ? L.price * BigInt(p.quantity) : null; // integer wei
         if (L) priced++;
-        const ts = tsMap.get(p.blockNumber);
         return {
           tx_hash: p.txHash,
           log_index: p.logIndex,
@@ -104,7 +99,8 @@ export async function indexItemSpend(from: bigint, to: bigint, budgetMs: number)
           price_per_item_wei: L ? L.price.toString() : null,
           spend_wei: spend != null ? spend.toString() : null,
           block_number: p.blockNumber,
-          ts: ts ? new Date(ts * 1000).toISOString() : null,
+          // ts is derived from block height at materialization time (see the 7d window), so we
+          // do not pay a per-block eth_getBlockByNumber RPC during indexing (keeps cron < 60s).
         };
       });
       const { error } = await db().from("item_purchases").upsert(rows, { onConflict: "tx_hash,log_index" });
@@ -120,27 +116,37 @@ export async function indexItemSpend(from: bigint, to: bigint, budgetMs: number)
 }
 
 // Resolve buyer wallet -> primaryUsername (cached in item_accounts). Bounded per run; cached
-// addresses are skipped, so steady state resolves only newly-seen buyers.
-export async function resolveBuyerUsernames(limit = 50): Promise<number> {
+// addresses are skipped, so steady state resolves only newly-seen buyers. Resolved with a
+// small concurrency pool so a run stays well under the 60s response budget.
+async function fetchUsername(address: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://gigaverse.io/api/account/${address}`, { headers: { accept: "application/json" }, cache: "no-store" });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { primaryUsername?: string | null };
+    return body.primaryUsername || null;
+  } catch {
+    return null; // cached as null so we do not refetch it every run
+  }
+}
+
+export async function resolveBuyerUsernames(limit = 200, concurrency = 6): Promise<number> {
   const { data: buyerRows } = await db().from("item_purchases").select("buyer");
   const uniq = [...new Set((buyerRows ?? []).map((b) => b.buyer as string))];
   const { data: known } = await db().from("item_accounts").select("address");
   const knownSet = new Set((known ?? []).map((k) => k.address as string));
   const todo = uniq.filter((a) => !knownSet.has(a)).slice(0, limit);
-  let resolved = 0;
-  for (const address of todo) {
-    let username: string | null = null;
-    try {
-      const res = await fetch(`https://gigaverse.io/api/account/${address}`, { headers: { accept: "application/json" }, cache: "no-store" });
-      if (res.ok) {
-        const body = (await res.json()) as { primaryUsername?: string | null };
-        username = body.primaryUsername || null;
-      }
-    } catch { /* leave null; cached so we do not refetch every run */ }
-    await db().from("item_accounts").upsert({ address, username, resolved_at: new Date().toISOString() });
-    resolved++;
-    await sleep(REQUEST_GAP_MS);
+
+  let next = 0, resolved = 0;
+  const now = new Date().toISOString();
+  async function worker() {
+    while (next < todo.length) {
+      const address = todo[next++];
+      const username = await fetchUsername(address);
+      await db().from("item_accounts").upsert({ address, username, resolved_at: now });
+      resolved++;
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(concurrency, todo.length) }, worker));
   return resolved;
 }
 
@@ -184,14 +190,26 @@ export interface ItemLeaderboardAgg {
 export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg; leaderboard: ItemLeaderboardAgg }> {
   const { data: rows, error } = await db()
     .from("item_purchases")
-    .select("item_id, buyer, quantity, spend_wei, ts");
+    .select("item_id, buyer, quantity, spend_wei, block_number");
   if (error) throw new Error(`item_purchases read failed: ${error.message}`);
 
   const { data: accs } = await db().from("item_accounts").select("address, username");
   const nameMap = new Map((accs ?? []).map((a) => [a.address as string, (a.username as string | null) ?? null]));
 
   const cursor = await getSyncState<{ lastBlock: string }>(CURSOR_KEY);
-  const weekAgo = Date.now() - 7 * 86_400_000;
+
+  // 7d window by block height, not per-row timestamps: estimate seconds-per-block from two
+  // sample blocks (2 RPC calls total) and convert one week into a block-count cutoff. This
+  // avoids an eth_getBlockByNumber per purchase during indexing. If the estimate fails, the
+  // 7d window is left empty rather than reported wrong.
+  const head = Number(await latestBlock());
+  const refNum = Math.max(Number(ITEM_MARKET_DEPLOY_BLOCK), head - 200_000);
+  const [tHead, tRef] = await Promise.all([blockTimestamp(head), blockTimestamp(refNum)]);
+  let cutoffBlock = -1;
+  if (tHead && tRef && tHead > tRef && head > refNum) {
+    const secPerBlock = (tHead - tRef) / (head - refNum);
+    cutoffBlock = head - Math.round(604_800 / secPerBlock);
+  }
 
   let total = 0n, items = 0, priced = 0, unpriced = 0;
   let total7 = 0n, items7 = 0, purch7 = 0;
@@ -216,7 +234,7 @@ export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg
     bbi.spend += s; bbi.qty += qty; bb.byItem.set(itemId, bbi);
     byBuyer.set(buyer, bb);
 
-    if (r.ts && new Date(r.ts as string).getTime() >= weekAgo) { total7 += s; items7 += qty; purch7++; }
+    if (cutoffBlock >= 0 && Number(r.block_number) >= cutoffBlock) { total7 += s; items7 += qty; purch7++; }
   }
 
   const sortItems = (m: Map<number, { spend: bigint; qty: number }>) =>
@@ -311,7 +329,7 @@ export async function runItemSpendCron(opts: { mode?: string; from?: bigint; to?
     cursorAdvancedTo = Number(to);
   }
 
-  const usernamesResolved = await resolveBuyerUsernames(50);
+  const usernamesResolved = await resolveBuyerUsernames(200);
   const { stats } = await materializeItemAggregates();
 
   return {
