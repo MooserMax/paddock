@@ -8,6 +8,7 @@ import { materializeScoresFor } from "@/lib/ingest/scores";
 import { materializeStableSkill } from "@/lib/ingest/stableSkill";
 import { syncAccounts } from "@/lib/ingest/accounts";
 import { materializeRecords } from "@/lib/ingest/records";
+import { runItemSpendCron } from "@/lib/ingest/itemSpend";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +46,14 @@ const ACCOUNT_DEADLINE_MS = 40_000; // accounts run in whatever budget remains
 const RECORDS_MIN_INTERVAL_MS = 12 * 60_000; // refresh records at most this often
 const RECORDS_START_BY_MS = 16_000; // only begin the records recompute this early in the cycle
 const RECORDS_LAST_RUN_KEY = "records_last_run";
+// On-chain item-spend incremental: same reliable-cadence pattern as records. The cursor
+// advance over the tiny per-cycle block delta is cheap; re-materializing the snapshots is the
+// cost, so it is gated by a min-interval AND only STARTS early in the cycle, never pushing the
+// function past its cap. A long cycle simply defers it to the next call. DB + one small
+// eth_getLogs, fault isolated.
+const ITEM_SPEND_MIN_INTERVAL_MS = 10 * 60_000;
+const ITEM_SPEND_START_BY_MS = 30_000; // only begin item-spend this early in the cycle
+const ITEM_SPEND_LAST_RUN_KEY = "item_spend_last_run";
 const LOCK_KEY = "ingest_lock";
 const LOCK_TTL_MS = 90_000; // a crashed run self-releases after this
 
@@ -181,6 +190,27 @@ export async function GET(req: NextRequest) {
       }
     } else {
       steps.stableSkillSkipped = "soft deadline";
+    }
+
+    // 3c. On-chain item spend: advance the cursor over the small block delta since last run
+    //     and re-materialize the spend + top-spender snapshots. Gated like records (min-interval
+    //     + early-start) so it only runs with spare budget and never risks the function cap; a
+    //     long cycle defers it. Idempotent (tx_hash+log_index) and fault isolated.
+    if (timeLeft()) {
+      try {
+        const lastItem = await getSyncState<{ at: number }>(ITEM_SPEND_LAST_RUN_KEY);
+        const dueItem = !lastItem || t0 - (lastItem.at ?? 0) >= ITEM_SPEND_MIN_INTERVAL_MS;
+        if (dueItem && Date.now() < t0 + ITEM_SPEND_START_BY_MS) {
+          steps.itemSpend = await runItemSpendCron({ mode: "incremental", budgetMs: 8_000, resolveLimit: 25 });
+          await setSyncState(ITEM_SPEND_LAST_RUN_KEY, { at: Date.now() });
+        } else {
+          steps.itemSpendSkipped = dueItem ? "deadline" : "interval";
+        }
+      } catch (e) {
+        steps.itemSpendError = msg(e);
+      }
+    } else {
+      steps.itemSpendSkipped = "soft deadline";
     }
 
     // 4. Resolve Gigaverse usernames for a small slice of displayed owners, in

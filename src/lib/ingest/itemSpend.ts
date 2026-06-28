@@ -379,8 +379,9 @@ export async function runItemSpendCron(opts: { mode?: string; from?: bigint; to?
   }
 
   // Username resolution is skipped during full-backfill passes (kept fast); run it via
-  // mode=resolve / incremental once the index is built.
-  const usernamesResolved = mode === "full" ? 0 : await resolveBuyerUsernames(200);
+  // mode=resolve / incremental once the index is built. resolveLimit lets a shared cron (the
+  // ingest orchestrator) keep this cheap.
+  const usernamesResolved = mode === "full" ? 0 : await resolveBuyerUsernames(opts.resolveLimit ?? 200);
   const { stats } = await materializeItemAggregates();
 
   return {
