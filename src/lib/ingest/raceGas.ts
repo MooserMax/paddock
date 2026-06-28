@@ -14,13 +14,15 @@ const RPC_URL = optionalEnv("RPC_URL") ?? DEFAULT_RPC_URL;
 // gasUsed x effectiveGasPrice from its receipt, summed in integer wei; ETH only at display.
 //
 // This is gas/transaction fees ONLY, entirely separate from entry-fee volume (ETH staked into
-// races) and from item spend. Two contract eras are covered: the old racing contract and the
-// current PetRacingSystem; each emits these events only in its own era, so scanning both over
-// the full range captures all-time create+enter gas.
-
-const RACING_OLD = "0x16e0b3d6394ce7597d34b73f5e5fb165fd74394e"; // historical races
-const PETRACING = "0xf6ed2a53f311352c869e268601aae5b78b9a9650"; // current PetRacingSystem
-const RACE_CONTRACTS = [RACING_OLD, PETRACING];
+// races) and from item spend. THREE contract eras emit RACE_CREATED/RACE_JOINED (verified by a
+// no-address-filter scan that reconciled exactly to the API totalRacesCreated, residual 0, no
+// 4th contract). Each emits only in its own era; scanning all three over the full range from the
+// earliest create captures all-time create+enter gas. tx_hash is the PK, so a tx that touches
+// more than one contract (migration-boundary overlap) is counted once.
+const RACING_OLD = "0x16e0b3d6394ce7597d34b73f5e5fb165fd74394e"; // era 1: 67,599,042..69,540,905 (6,580 creates)
+const RACING_MID = "0x0ba76cfc1735327e26018bc9aaf680c652e72f82"; // era 2: 69,542,448..70,467,884 (3,342 creates)
+const PETRACING  = "0xf6ed2a53f311352c869e268601aae5b78b9a9650"; // era 3: 70,466,922..head (5,611+ creates)
+const RACE_CONTRACTS = [RACING_OLD, RACING_MID, PETRACING];
 
 const CURSOR_KEY = "race_gas_scan";       // { lastBlock } -- deploy->here indexed (set on full catch-up)
 const BACKFILL_KEY = "race_gas_backfill";  // { nextBlock } -- resumable full backfill progress
