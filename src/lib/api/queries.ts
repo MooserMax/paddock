@@ -1859,21 +1859,29 @@ export async function getRecentWins(limit = 12): Promise<import("./types").Recen
 // ---- On-chain item spend (precomputed snapshots, read-only, no chain) --------
 // Light reads of the materialized item-spend aggregates from sync_state. Keys are inlined so
 // these stay free of the chain-heavy ingest module. Item spend is native ETH (18 decimals).
-export interface ItemSpendHome { itemsBought: number; spendEthWei: string; uniqueBuyers: number }
+// Racing consumables (dung + butterfly) ONLY. spendEthWei/itemsBought are the combined
+// consumable totals; the split lets the homepage show dung vs butterfly.
+export interface ItemSpendHome { itemsBought: number; spendEthWei: string; uniqueBuyers: number; dungEthWei: string; butterflyEthWei: string }
 
 export async function getItemSpendHomeStats(): Promise<ItemSpendHome | null> {
   const { data } = await db().from("sync_state").select("value").eq("key", "item_stats_v1").maybeSingle();
-  const v = data?.value as { totalSpendWei?: string; itemsBought?: number; uniqueBuyers?: number; pricedPurchases?: number; complete?: boolean } | undefined;
+  const v = data?.value as { totalSpendWei?: string; itemsBought?: number; uniqueBuyers?: number; pricedPurchases?: number; complete?: boolean; dung?: { spendWei?: string }; butterfly?: { spendWei?: string } } | undefined;
   // Omit until the deploy->latest backfill has reached head: the homepage panel is labelled
   // "all time", so a partial sub-range must not show there. Flips on once complete.
   if (!v || !v.complete || !v.pricedPurchases) return null;
-  return { itemsBought: v.itemsBought ?? 0, spendEthWei: v.totalSpendWei ?? "0", uniqueBuyers: v.uniqueBuyers ?? 0 };
+  return {
+    itemsBought: v.itemsBought ?? 0,
+    spendEthWei: v.totalSpendWei ?? "0",
+    uniqueBuyers: v.uniqueBuyers ?? 0,
+    dungEthWei: v.dung?.spendWei ?? "0",
+    butterflyEthWei: v.butterfly?.spendWei ?? "0",
+  };
 }
 
 export interface SpenderRow {
   rank: number; address: string; username: string | null;
   totalSpendWei: string; totalSpendEth: string; itemsBought: number;
-  byItem: { itemId: number; spendEth: string; quantity: number }[];
+  byItem: { itemId: number; name?: string; spendEth: string; quantity: number }[];
 }
 export interface SpenderBoardData { spenders: SpenderRow[]; uniqueBuyers: number; complete?: boolean; generatedAt: string }
 

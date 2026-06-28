@@ -27,6 +27,24 @@ export const ITEM_LEADERBOARD_KEY = "item_leaderboard_v1";
 
 const CHUNK = 9000n; // <= 9k blocks per getLogs; fetchItemLogs halves further on the 10k cap
 
+// Racing consumables ONLY: the dung (drag/slow) and butterfly (speed boost) items pets produce
+// and use in races, plus all 8 faction variants of each. Resolved by NAME from the public
+// Gigaverse items catalog (GET /api/indexer/gameitems, docId -> NAME_CID), cross-checked against
+// the race scheduledItems usage seed. Deliberately EXCLUDES name-substring false positives such
+// as itemId 2 "Dungeon Scrap" and itemId 615 "Chum" (not a consumable, high-volume but unrelated).
+// The dashboard "item spend" must reflect only these; the whole-marketplace total is not it.
+export const CONSUMABLE_NAMES: Record<number, string> = {
+  607: "Dung", 608: "Crusader Dung", 609: "Overseer Dung", 610: "Athena Dung", 611: "Archon Dung",
+  612: "Foxglove Dung", 613: "Summoner Dung", 614: "Chobo Dung", 624: "Gigus Dung",
+  603: "Butterfly", 593: "Crusader Butterfly", 594: "Overseer Butterfly", 595: "Athena Butterfly",
+  596: "Archon Butterfly", 597: "Foxglove Butterfly", 598: "Summoner Butterfly", 599: "Chobo Butterfly", 623: "Gigus Butterfly",
+};
+export const DUNG_ITEM_IDS = [607, 608, 609, 610, 611, 612, 613, 614, 624];
+export const BUTTERFLY_ITEM_IDS = [593, 594, 595, 596, 597, 598, 599, 603, 623];
+const DUNG_SET = new Set(DUNG_ITEM_IDS);
+const BUTTERFLY_SET = new Set(BUTTERFLY_ITEM_IDS);
+const CONSUMABLE_SET = new Set([...DUNG_ITEM_IDS, ...BUTTERFLY_ITEM_IDS]);
+
 // PostgREST caps a SELECT at 1000 rows. Aggregation must read EVERY row, so page through with
 // a stable, unique ordering (else page boundaries drop or duplicate rows). Without this the
 // totals silently reflect only the first 1000 purchases.
@@ -176,20 +194,27 @@ export function weiToEthString(wei: bigint, dp = 7): string {
   return `${wei < 0n ? "-" : ""}${whole}.${frac}`;
 }
 
+interface SpendSplit { spendWei: string; spendEth: string; itemsBought: number }
+interface NamedItemRow { itemId: number; name: string; spendWei: string; spendEth: string; quantity: number }
+
+// ALL headline figures here are RACING CONSUMABLES ONLY (dung + butterfly). The whole-market
+// total is retained under `allItems` for reference but is never the dashboard "item spend".
 export interface ItemStatsAgg {
-  totalSpendWei: string;
+  totalSpendWei: string;   // dung + butterfly combined
   totalSpendEth: string;
   itemsBought: number;
-  // uniqueBuyers = distinct buyers among PRICED purchases (those whose listing is in the index;
-  // i.e. spenders with a measured ETH amount). uniqueBuyersAll = distinct buyers across ALL
-  // purchases including any still-unpriced ones (listing predates the indexed range). After the
-  // full deploy->latest backfill these converge, because every listing since deploy is indexed.
+  // uniqueBuyers = distinct buyers among PRICED consumable purchases (spenders with a measured
+  // ETH amount). uniqueBuyersAll = distinct buyers across ALL consumable purchases incl. any
+  // still-unpriced. After the full backfill these converge.
   uniqueBuyers: number;
   uniqueBuyersAll: number;
   pricedPurchases: number;
   unpricedPurchases: number;
-  byItem: { itemId: number; spendWei: string; spendEth: string; quantity: number }[];
+  dung: SpendSplit;
+  butterfly: SpendSplit;
+  byItem: NamedItemRow[]; // consumables only, named
   window7d: { spendWei: string; spendEth: string; itemsBought: number; purchases: number };
+  allItems: { spendWei: string; spendEth: string; itemsBought: number; pricedPurchases: number }; // whole market, reference only
   generatedAt: string;
   lastIndexedBlock: number | null;
   headBlock: number | null;
@@ -203,12 +228,12 @@ export interface ItemLeaderboardAgg {
     rank: number;
     address: string;
     username: string | null;
-    totalSpendWei: string;
+    totalSpendWei: string; // consumable spend only
     totalSpendEth: string;
     itemsBought: number;
-    byItem: { itemId: number; spendWei: string; spendEth: string; quantity: number }[];
+    byItem: NamedItemRow[]; // consumables only, named
   }[];
-  uniqueBuyers: number; // distinct spenders (priced purchases)
+  uniqueBuyers: number; // distinct consumable spenders (priced)
   complete: boolean;    // deploy->latest backfill has reached head
   generatedAt: string;
 }
@@ -240,21 +265,31 @@ export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg
     cutoffBlock = head - Math.round(604_800 / secPerBlock);
   }
 
+  // Headline aggregates are CONSUMABLES ONLY (dung + butterfly). allItems is the whole-market
+  // reference. A purchase contributes to consumable spend iff its item_id is a dung/butterfly id.
   let total = 0n, items = 0, priced = 0, unpriced = 0;
+  let dungWei = 0n, dungItems = 0, buttWei = 0n, buttItems = 0;
   let total7 = 0n, items7 = 0, purch7 = 0;
-  const buyers = new Set<string>();      // priced-purchase buyers (spenders)
-  const allBuyers = new Set<string>();   // every distinct buyer, priced or not
+  let allWei = 0n, allItemsCount = 0, allPriced = 0;
+  const buyers = new Set<string>();      // priced consumable buyers (spenders)
+  const allBuyers = new Set<string>();   // every distinct consumable buyer, priced or not
   const byItem = new Map<number, { spend: bigint; qty: number }>();
   const byBuyer = new Map<string, { spend: bigint; items: number; byItem: Map<number, { spend: bigint; qty: number }> }>();
 
   for (const r of rows) {
+    const itemId = Number(r.item_id);
+    const isConsumable = CONSUMABLE_SET.has(itemId);
+    if (r.spend_wei != null) { allWei += BigInt(r.spend_wei as string); allItemsCount += Number(r.quantity); allPriced++; } // whole-market reference
+    if (!isConsumable) continue;
+
     allBuyers.add(r.buyer);
-    if (r.spend_wei == null) { unpriced++; continue; } // unpriced rows are not spend
+    if (r.spend_wei == null) { unpriced++; continue; } // unpriced consumable rows are not spend
     const s = BigInt(r.spend_wei as string);
     const qty = Number(r.quantity);
-    const itemId = Number(r.item_id);
     const buyer = r.buyer as string;
     total += s; items += qty; priced++; buyers.add(buyer);
+    if (DUNG_SET.has(itemId)) { dungWei += s; dungItems += qty; }
+    else if (BUTTERFLY_SET.has(itemId)) { buttWei += s; buttItems += qty; }
 
     const it = byItem.get(itemId) ?? { spend: 0n, qty: 0 };
     it.spend += s; it.qty += qty; byItem.set(itemId, it);
@@ -268,9 +303,9 @@ export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg
     if (cutoffBlock >= 0 && Number(r.block_number) >= cutoffBlock) { total7 += s; items7 += qty; purch7++; }
   }
 
-  const sortItems = (m: Map<number, { spend: bigint; qty: number }>) =>
+  const sortItems = (m: Map<number, { spend: bigint; qty: number }>): NamedItemRow[] =>
     [...m.entries()].sort((a, b) => (b[1].spend > a[1].spend ? 1 : b[1].spend < a[1].spend ? -1 : 0))
-      .map(([itemId, v]) => ({ itemId, spendWei: v.spend.toString(), spendEth: weiToEthString(v.spend), quantity: v.qty }));
+      .map(([itemId, v]) => ({ itemId, name: CONSUMABLE_NAMES[itemId] ?? `Item #${itemId}`, spendWei: v.spend.toString(), spendEth: weiToEthString(v.spend), quantity: v.qty }));
 
   const stats: ItemStatsAgg = {
     totalSpendWei: total.toString(),
@@ -280,8 +315,11 @@ export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg
     uniqueBuyersAll: allBuyers.size,
     pricedPurchases: priced,
     unpricedPurchases: unpriced,
+    dung: { spendWei: dungWei.toString(), spendEth: weiToEthString(dungWei), itemsBought: dungItems },
+    butterfly: { spendWei: buttWei.toString(), spendEth: weiToEthString(buttWei), itemsBought: buttItems },
     byItem: sortItems(byItem),
     window7d: { spendWei: total7.toString(), spendEth: weiToEthString(total7), itemsBought: items7, purchases: purch7 },
+    allItems: { spendWei: allWei.toString(), spendEth: weiToEthString(allWei), itemsBought: allItemsCount, pricedPurchases: allPriced },
     generatedAt: new Date().toISOString(),
     lastIndexedBlock: cursor ? Number(cursor.lastBlock) : null,
     headBlock: head,

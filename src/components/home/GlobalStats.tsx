@@ -13,10 +13,13 @@ import { formatInt, formatEth } from "@/lib/format";
 // not live yet, so it is null and the item rows are omitted. When it lands it lights up. The
 // item payment currency is NATIVE ETH (verified from the ItemMarketSystem source), not an
 // ERC-20, so item spend will be denominated in ETH.
+// Racing consumables only (dung + butterfly). NOT the whole-marketplace item total.
 export interface GlobalItemStats {
   itemsBought: number;
   spendEthWei: string;
   uniqueBuyers: number;
+  dungEthWei: string;
+  butterflyEthWei: string;
 }
 
 // Total player gas (transaction fees) spent creating and entering races, summed from real
@@ -47,8 +50,14 @@ export default function GlobalStats({ site, giga, itemStats, raceGas }: { site: 
   }
   if (site?.recentBigSale) stats.push({ value: ethStr(site.recentBigSale.priceEth * 1e18, 3), label: "Top recent sale", accent: "var(--gold)" });
   if (itemStats) {
-    stats.push({ value: formatInt(itemStats.itemsBought), label: "Items bought" });
-    stats.push({ value: ethStr(itemStats.spendEthWei, 5), label: "Item spend", accent: "var(--gold)" });
+    // Racing consumables only (dung + butterfly), with the dung vs butterfly split as the sub.
+    stats.push({ value: formatInt(itemStats.itemsBought), label: "Race items bought", sub: "dung + butterfly" });
+    stats.push({
+      value: ethStr(itemStats.spendEthWei, 4),
+      label: "Spent on race items",
+      sub: `dung ${(Number(itemStats.dungEthWei) / 1e18).toFixed(3)} · butterfly ${(Number(itemStats.butterflyEthWei) / 1e18).toFixed(3)} ETH`,
+      accent: "var(--gold)",
+    });
   }
   if (raceGas) {
     // Gas/transaction fees to create + enter races. Distinct from entry-fee volume and item spend.
