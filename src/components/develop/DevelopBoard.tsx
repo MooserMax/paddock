@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useAccount, usePublicClient, useCapabilities, useSendCalls, useCallsStatus, useSendTransaction } from "wagmi";
 import type { DevelopResponse, DevelopCandidate, DevelopRace, WalletSummary } from "@/lib/api/types";
 import { ConnectBar } from "@/components/racefinder/EntryControls";
@@ -74,11 +75,19 @@ const RACES_BUCKETS = [
   { key: "1-3", label: "1-3 races", test: (n: number) => n >= 1 && n <= 3 },
   { key: "4+", label: "4+ races", test: (n: number) => n >= 4 },
 ] as const;
-const SORTS: { key: "reveal" | "rarity" | "races"; label: string }[] = [
+type SortKey = "reveal" | "rarity" | "races" | "elo";
+const SORTS: { key: SortKey; label: string }[] = [
   { key: "reveal", label: "Least revealed" },
   { key: "rarity", label: "Rarity" },
   { key: "races", label: "Fewest races" },
+  { key: "elo", label: "ELO" },
 ];
+// A horse is ELO-rated once it has raced; a 0-race horse carries only a provisional 1500,
+// so it is "unrated". eloRaceCount === racesRun on live Gigaverse data, so racesRun is the
+// fresh race-count signal.
+function isRated(c: DevelopCandidate): boolean { return c.elo != null && c.racesRun >= 1; }
+// Sort value for ELO desc with unrated grouped at the end.
+function eloSortVal(c: DevelopCandidate): number { return isRated(c) ? (c.elo as number) : -Infinity; }
 
 // Spread selected horses across the open free slots (most-open race first), so they
 // are not all stacked into one race. Returns what fit and what did not.
@@ -144,7 +153,7 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
   const [rarityFilter, setRarityFilter] = useState<Set<number>>(new Set());
   const [revealBucket, setRevealBucket] = useState<string | null>(null);
   const [racesBucket, setRacesBucket] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<"reveal" | "rarity" | "races">("reveal");
+  const [sortBy, setSortBy] = useState<SortKey>("reveal");
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 40;
 
@@ -327,6 +336,7 @@ export default function DevelopBoard({ initialWallet, initialPickSet = "" }: { i
     .sort((a, b) =>
       sortBy === "rarity" ? b.rarity - a.rarity || a.revealPct - b.revealPct
       : sortBy === "races" ? a.racesRun - b.racesRun || a.revealPct - b.revealPct
+      : sortBy === "elo" ? eloSortVal(b) - eloSortVal(a) || a.revealPct - b.revealPct // ELO desc, unrated at the end
       : a.revealPct - b.revealPct || b.rarity - a.rarity // reveal (default): least-revealed, then rarity desc
     );
   const paged = visible.slice(0, page * PAGE_SIZE); // paginate so a 332-horse stable stays snappy
@@ -891,7 +901,27 @@ function Pill({ active, onClick, label, color }: { active: boolean; onClick: () 
   );
 }
 
+// The real Gigling image (per-pet IPFS url, already allowed by the CSP img-src and
+// next/image remotePatterns). Lazy-loaded; falls back to a rarity-tinted tile on error
+// or when there is no url, so a broken image never breaks the row.
+function Thumb({ src, id, rarity }: { src: string | null; id: number; rarity: number }) {
+  const [err, setErr] = useState(false);
+  const tile = (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border" style={{ borderColor: "var(--line-strong)", background: "var(--paper-sunken)" }} aria-hidden>
+      <span className="type-micro" style={{ color: rarityDisplay(rarity).color }}>#{String(id).slice(-3)}</span>
+    </div>
+  );
+  if (!src || err) return tile;
+  return (
+    <Image
+      src={src} alt={`Gigling #${id}`} width={40} height={40} loading="lazy" onError={() => setErr(true)}
+      className="h-10 w-10 shrink-0 rounded-md object-cover" style={{ background: "var(--paper-sunken)" }}
+    />
+  );
+}
+
 function DevelopRow({ c, selected, disabled, assignedRace, noSlot, onToggle }: { c: DevelopCandidate; selected: boolean; disabled: boolean; assignedRace?: number | null; noSlot?: boolean; onToggle: () => void }) {
+  const rated = isRated(c);
   const statusLabel =
     c.status === "available" ? null
     : c.status === "racing" ? "racing now"
@@ -909,6 +939,7 @@ function DevelopRow({ c, selected, disabled, assignedRace, noSlot, onToggle }: {
         <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border" style={{ borderColor: selected ? "var(--glow)" : "var(--line-strong)", background: selected ? "var(--glow)" : "transparent" }} aria-hidden>
           {selected && <span style={{ color: "#14110f", fontSize: 12 }}>✓</span>}
         </span>
+        <Thumb src={c.imgUrl} id={c.petId} rarity={c.rarity} />
         <div>
           <Link href={`/pet/${c.petId}`} onClick={(e) => e.stopPropagation()} className="type-data text-ink transition-paddock hover:text-glow">{c.name ?? `#${c.petId}`}</Link>
           <p className="type-micro normal-case text-ink-faint">
@@ -917,7 +948,21 @@ function DevelopRow({ c, selected, disabled, assignedRace, noSlot, onToggle }: {
           {c.status === "not_registered" && <p className="type-micro normal-case" style={{ color: "var(--gold)" }}>Register on Gigaverse to race this horse.</p>}
         </div>
       </div>
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-3">
+        {/* ELO: the real racePublic value, or 'unrated' for a 0-race horse (provisional 1500). */}
+        <div className="shrink-0 text-right">
+          {rated ? (
+            <>
+              <span className="type-data tabular-nums text-ink">{Math.round(c.elo as number)}</span>
+              <span className="type-micro block normal-case text-ink-faint">ELO · {c.racesRun} {c.racesRun === 1 ? "race" : "races"}</span>
+            </>
+          ) : (
+            <>
+              <span className="type-data text-ink-faint">unrated</span>
+              <span className="type-micro block normal-case text-ink-faint">no ELO races yet</span>
+            </>
+          )}
+        </div>
         {/* The race this horse will enter, shown inline as soon as it is selected, so
             the assignment is never a black box until review. */}
         {selected && noSlot && <span className="type-micro uppercase tracking-wider" style={{ color: "var(--gold)" }}>no open slot</span>}

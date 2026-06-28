@@ -401,9 +401,12 @@ export interface DevelopCandidate {
   petId: number;
   name: string | null;
   rarity: number;
+  imgUrl: string | null; // the real Gigling image (per-pet IPFS url), for the row thumbnail
   revealPct: number; // 0..1 overall reveal progress (less is more to gain)
   reveals: { start: number; speed: number; stamina: number; finish: number }; // per-stat reveal counts
-  racesRun: number;
+  racesRun: number; // also the ELO race count (verified eloRaceCount === racesRun on live data)
+  elo: number | null; // racePublic.elo. null only if unsynced; for a 0-race horse it is the
+  // provisional 1500, so the UI treats racesRun === 0 as "unrated" rather than showing 1500.
   // "not_registered": hatched but not registered for racing on-chain (cannot race).
   status: "available" | "racing" | "resting" | "not_registered";
 }

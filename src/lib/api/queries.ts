@@ -1592,13 +1592,14 @@ export async function getDevelop(walletParam: string | null): Promise<DevelopRes
   };
   if (!wallet) return { wallet: null, candidates: [], ...base };
 
-  // The wallet's hatched horses with their reveal data.
-  type PetRow = { id: number; name: string | null; rarity: number | null; races_run: number | null; reveals_start: number | null; reveals_speed: number | null; reveals_stamina: number | null; reveals_finish: number | null };
+  // The wallet's hatched horses with their reveal data, ELO (racePublic.elo, already
+  // stored), and image url.
+  type PetRow = { id: number; name: string | null; rarity: number | null; races_run: number | null; reveals_start: number | null; reveals_speed: number | null; reveals_stamina: number | null; reveals_finish: number | null; elo: number | null; img_url: string | null };
   const pets: PetRow[] = [];
   for (let from = 0; ; from += 1000) {
     const { data } = await db()
       .from("pets")
-      .select("id, name, rarity, races_run, reveals_start, reveals_speed, reveals_stamina, reveals_finish")
+      .select("id, name, rarity, races_run, reveals_start, reveals_speed, reveals_stamina, reveals_finish, elo, img_url")
       .eq("owner_address", wallet).eq("hatched", true).order("id", { ascending: true }).range(from, from + 999);
     if (!data || data.length === 0) break;
     pets.push(...(data as PetRow[]));
@@ -1636,9 +1637,11 @@ export async function getDevelop(walletParam: string | null): Promise<DevelopRes
     petId: p.id,
     name: p.name,
     rarity: p.rarity ?? 0,
+    imgUrl: p.img_url ?? null,
     revealPct: revealByPet.get(p.id) ?? 0,
     reveals: { start: p.reveals_start ?? 0, speed: p.reveals_speed ?? 0, stamina: p.reveals_stamina ?? 0, finish: p.reveals_finish ?? 0 },
     racesRun: p.races_run ?? 0,
+    elo: p.elo != null ? Number(p.elo) : null, // null only if unsynced; provisional 1500 for 0-race horses
     status: statusOf(p.id),
   }));
 
