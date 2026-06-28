@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
     const stats = await getSyncState<ItemStatsAgg>(ITEM_STATS_KEY);
     if (!stats) {
       return ok(
-        { available: false, currency: "ETH", totalSpendWei: "0", totalSpendEth: "0", itemsBought: 0, uniqueBuyers: 0, byItem: [], window7d: null },
+        { available: false, complete: false, currency: "ETH", totalSpendWei: "0", totalSpendEth: "0", itemsBought: 0, uniqueBuyers: 0, uniqueBuyersAll: 0, byItem: [], window7d: null },
         { sMaxAge: 120, staleWhileRevalidate: 600 }
       );
     }

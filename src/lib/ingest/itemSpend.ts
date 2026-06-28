@@ -180,13 +180,22 @@ export interface ItemStatsAgg {
   totalSpendWei: string;
   totalSpendEth: string;
   itemsBought: number;
+  // uniqueBuyers = distinct buyers among PRICED purchases (those whose listing is in the index;
+  // i.e. spenders with a measured ETH amount). uniqueBuyersAll = distinct buyers across ALL
+  // purchases including any still-unpriced ones (listing predates the indexed range). After the
+  // full deploy->latest backfill these converge, because every listing since deploy is indexed.
   uniqueBuyers: number;
+  uniqueBuyersAll: number;
   pricedPurchases: number;
   unpricedPurchases: number;
   byItem: { itemId: number; spendWei: string; spendEth: string; quantity: number }[];
   window7d: { spendWei: string; spendEth: string; itemsBought: number; purchases: number };
   generatedAt: string;
   lastIndexedBlock: number | null;
+  headBlock: number | null;
+  // True once the deploy->latest backfill has reached head (cursor set). Until then the numbers
+  // cover only an indexed sub-range and must not be presented as "all time".
+  complete: boolean;
 }
 
 export interface ItemLeaderboardAgg {
@@ -199,7 +208,8 @@ export interface ItemLeaderboardAgg {
     itemsBought: number;
     byItem: { itemId: number; spendWei: string; spendEth: string; quantity: number }[];
   }[];
-  uniqueBuyers: number;
+  uniqueBuyers: number; // distinct spenders (priced purchases)
+  complete: boolean;    // deploy->latest backfill has reached head
   generatedAt: string;
 }
 
@@ -232,11 +242,13 @@ export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg
 
   let total = 0n, items = 0, priced = 0, unpriced = 0;
   let total7 = 0n, items7 = 0, purch7 = 0;
-  const buyers = new Set<string>();
+  const buyers = new Set<string>();      // priced-purchase buyers (spenders)
+  const allBuyers = new Set<string>();   // every distinct buyer, priced or not
   const byItem = new Map<number, { spend: bigint; qty: number }>();
   const byBuyer = new Map<string, { spend: bigint; items: number; byItem: Map<number, { spend: bigint; qty: number }> }>();
 
-  for (const r of rows ?? []) {
+  for (const r of rows) {
+    allBuyers.add(r.buyer);
     if (r.spend_wei == null) { unpriced++; continue; } // unpriced rows are not spend
     const s = BigInt(r.spend_wei as string);
     const qty = Number(r.quantity);
@@ -265,12 +277,15 @@ export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg
     totalSpendEth: weiToEthString(total),
     itemsBought: items,
     uniqueBuyers: buyers.size,
+    uniqueBuyersAll: allBuyers.size,
     pricedPurchases: priced,
     unpricedPurchases: unpriced,
     byItem: sortItems(byItem),
     window7d: { spendWei: total7.toString(), spendEth: weiToEthString(total7), itemsBought: items7, purchases: purch7 },
     generatedAt: new Date().toISOString(),
     lastIndexedBlock: cursor ? Number(cursor.lastBlock) : null,
+    headBlock: head,
+    complete: cursor != null, // cursor is set only when the full backfill reaches head
   };
 
   const spenders = [...byBuyer.entries()]
@@ -286,7 +301,7 @@ export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg
       byItem: sortItems(v.byItem).slice(0, 12),
     }));
 
-  const leaderboard: ItemLeaderboardAgg = { spenders, uniqueBuyers: buyers.size, generatedAt: new Date().toISOString() };
+  const leaderboard: ItemLeaderboardAgg = { spenders, uniqueBuyers: buyers.size, complete: cursor != null, generatedAt: new Date().toISOString() };
 
   await setSyncState(ITEM_STATS_KEY, stats);
   await setSyncState(ITEM_LEADERBOARD_KEY, leaderboard);
@@ -300,17 +315,37 @@ export interface CronResult {
   usernamesResolved: number;
   cursorAdvancedTo: number | null;
   backfillNextBlock: number | null;
-  totals: { spendEth: string; itemsBought: number; uniqueBuyers: number; pricedPurchases: number };
+  complete: boolean;
+  totals: { spendEth: string; itemsBought: number; uniqueBuyers: number; uniqueBuyersAll: number; pricedPurchases: number };
 }
 
-// One cron pass. Modes:
+// One cron pass. Each pass returns well under Vercel's ~60s edge first-byte limit, so the full
+// backfill runs as many resumable passes. Modes:
 //   from/to        -> index exactly that range, do NOT advance the cursor (verification/manual).
-//   mode=full      -> resume the deploy->latest backfill (advances cursor only when caught up).
+//   mode=full      -> resume the deploy->latest backfill (advances cursor only on full catch-up).
+//   mode=resolve   -> resolve usernames only (no chain indexing) + re-materialize.
 //   mode=incremental (default) -> from cursor+1 to latest, advance cursor.
-export async function runItemSpendCron(opts: { mode?: string; from?: bigint; to?: bigint; budgetMs?: number }): Promise<CronResult> {
-  const budgetMs = opts.budgetMs ?? 240_000;
+export async function runItemSpendCron(opts: { mode?: string; from?: bigint; to?: bigint; budgetMs?: number; resolveLimit?: number }): Promise<CronResult> {
   const head = await latestBlock();
   let mode = opts.mode ?? "incremental";
+
+  const emptyIndex: IndexResult = { fromBlock: 0, lastProcessed: 0, done: true, listings: 0, purchases: 0, priced: 0 };
+  const pack = (extra: Partial<CronResult>, stats: ItemStatsAgg): CronResult => ({
+    mode, range: { from: 0, to: 0 }, index: emptyIndex, usernamesResolved: 0, cursorAdvancedTo: null,
+    backfillNextBlock: null, complete: stats.complete,
+    totals: { spendEth: stats.totalSpendEth, itemsBought: stats.itemsBought, uniqueBuyers: stats.uniqueBuyers, uniqueBuyersAll: stats.uniqueBuyersAll, pricedPurchases: stats.pricedPurchases },
+    ...extra,
+  });
+
+  // Resolve-only pass: backfill usernames in batches without touching the chain index.
+  if (mode === "resolve") {
+    const usernamesResolved = await resolveBuyerUsernames(opts.resolveLimit ?? 400, 10);
+    const { stats } = await materializeItemAggregates();
+    return pack({ usernamesResolved }, stats);
+  }
+
+  // Indexing budget kept under the edge limit; the full backfill is many short resumable passes.
+  const budgetMs = opts.budgetMs ?? (mode === "full" ? 30_000 : 35_000);
   let from: bigint, to: bigint, advanceCursor = false, backfillNext: number | null = null;
 
   if (opts.from != null && opts.to != null) {
@@ -325,13 +360,8 @@ export async function runItemSpendCron(opts: { mode?: string; from?: bigint; to?
     if (!cur) {
       // No cursor yet: a bounded backfill must run first. Do nothing rather than silently
       // launch a full deploy->latest scan from an incremental tick.
-      return {
-        mode: "incremental",
-        range: { from: 0, to: 0 },
-        index: { fromBlock: 0, lastProcessed: 0, done: true, listings: 0, purchases: 0, priced: 0 },
-        usernamesResolved: 0, cursorAdvancedTo: null, backfillNextBlock: null,
-        totals: { spendEth: "0", itemsBought: 0, uniqueBuyers: 0, pricedPurchases: 0 },
-      };
+      const { stats } = await materializeItemAggregates();
+      return pack({ mode: "incremental" }, stats);
     }
     from = BigInt(cur.lastBlock) + 1n; to = head; advanceCursor = true;
   }
@@ -348,7 +378,9 @@ export async function runItemSpendCron(opts: { mode?: string; from?: bigint; to?
     cursorAdvancedTo = Number(to);
   }
 
-  const usernamesResolved = await resolveBuyerUsernames(200);
+  // Username resolution is skipped during full-backfill passes (kept fast); run it via
+  // mode=resolve / incremental once the index is built.
+  const usernamesResolved = mode === "full" ? 0 : await resolveBuyerUsernames(200);
   const { stats } = await materializeItemAggregates();
 
   return {
@@ -358,6 +390,7 @@ export async function runItemSpendCron(opts: { mode?: string; from?: bigint; to?
     usernamesResolved,
     cursorAdvancedTo,
     backfillNextBlock: backfillNext,
-    totals: { spendEth: stats.totalSpendEth, itemsBought: stats.itemsBought, uniqueBuyers: stats.uniqueBuyers, pricedPurchases: stats.pricedPurchases },
+    complete: stats.complete,
+    totals: { spendEth: stats.totalSpendEth, itemsBought: stats.itemsBought, uniqueBuyers: stats.uniqueBuyers, uniqueBuyersAll: stats.uniqueBuyersAll, pricedPurchases: stats.pricedPurchases },
   };
 }

@@ -1863,8 +1863,10 @@ export interface ItemSpendHome { itemsBought: number; spendEthWei: string; uniqu
 
 export async function getItemSpendHomeStats(): Promise<ItemSpendHome | null> {
   const { data } = await db().from("sync_state").select("value").eq("key", "item_stats_v1").maybeSingle();
-  const v = data?.value as { totalSpendWei?: string; itemsBought?: number; uniqueBuyers?: number; pricedPurchases?: number } | undefined;
-  if (!v || !v.pricedPurchases) return null; // omit until there is real, priced spend
+  const v = data?.value as { totalSpendWei?: string; itemsBought?: number; uniqueBuyers?: number; pricedPurchases?: number; complete?: boolean } | undefined;
+  // Omit until the deploy->latest backfill has reached head: the homepage panel is labelled
+  // "all time", so a partial sub-range must not show there. Flips on once complete.
+  if (!v || !v.complete || !v.pricedPurchases) return null;
   return { itemsBought: v.itemsBought ?? 0, spendEthWei: v.totalSpendWei ?? "0", uniqueBuyers: v.uniqueBuyers ?? 0 };
 }
 
@@ -1873,7 +1875,7 @@ export interface SpenderRow {
   totalSpendWei: string; totalSpendEth: string; itemsBought: number;
   byItem: { itemId: number; spendEth: string; quantity: number }[];
 }
-export interface SpenderBoardData { spenders: SpenderRow[]; uniqueBuyers: number; generatedAt: string }
+export interface SpenderBoardData { spenders: SpenderRow[]; uniqueBuyers: number; complete?: boolean; generatedAt: string }
 
 export async function getItemLeaderboardSnapshot(): Promise<SpenderBoardData | null> {
   const { data } = await db().from("sync_state").select("value").eq("key", "item_leaderboard_v1").maybeSingle();

@@ -23,6 +23,9 @@ export default function SpenderBoard({ board }: { board: SpenderBoardData | null
     <>
       <p className="type-micro mb-4 max-w-2xl normal-case leading-relaxed text-ink-faint">
         Wallets ranked by total native ETH spent buying items on the on-chain marketplace (ItemMarketSystem). Item spends are small, shown to full precision rather than rounded away. Item names are not public yet, so items read as &ldquo;Item #id&rdquo;.
+        {board.complete === false && (
+          <span className="ml-1" style={{ color: "var(--gold)" }}>Indexing on-chain history now, these totals are partial and growing toward all-time.</span>
+        )}
       </p>
 
       <div className="overflow-hidden rounded-lg border hairline">
@@ -58,7 +61,7 @@ export default function SpenderBoard({ board }: { board: SpenderBoardData | null
       </div>
 
       <p className="type-micro mt-4 normal-case text-ink-faint">
-        {formatInt(board.uniqueBuyers)} unique buyers. Served by{" "}
+        {formatInt(board.uniqueBuyers)} unique spenders (buyers with priced on-chain spend). Served by{" "}
         <Link href="/api/v1/item-leaderboard" className="underline transition-paddock hover:text-glow">/api/v1/item-leaderboard</Link>. Spend is native ETH, exact to the wei.
       </p>
     </>
