@@ -10,6 +10,7 @@ const TABS: { key: string; label: string; href: string }[] = [
   { key: "winrate", label: "Win rate", href: "/leaderboards?metric=winrate" },
   { key: "earnings", label: "Earnings", href: "/leaderboards?metric=earnings" },
   { key: "upside", label: "Upside", href: "/leaderboards?metric=upside" },
+  { key: "spenders", label: "Top spenders", href: "/leaderboards?metric=spenders" },
   { key: "stable", label: "Stable skill", href: "/stables" },
 ];
 

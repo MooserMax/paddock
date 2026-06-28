@@ -11,12 +11,17 @@ interface Cmd {
   run: () => void;
 }
 
+// Every primary destination, so the palette is a complete index of the site. On mobile there
+// is no link bar, so this list IS the navigation: it must cover every grouped destination.
 const PAGES: { label: string; href: string; hint: string }[] = [
   { label: "Home", href: "/", hint: "page" },
   { label: "Wallet lookup", href: "/wallet", hint: "page" },
   { label: "Races", href: "/races", hint: "page" },
+  { label: "Race Finder", href: "/race-finder", hint: "page" },
+  { label: "Develop", href: "/develop", hint: "page" },
   { label: "Scanner", href: "/scanner", hint: "page" },
   { label: "Leaderboards", href: "/leaderboards", hint: "page" },
+  { label: "Records", href: "/records", hint: "page" },
   { label: "Odds calibration", href: "/calibration", hint: "page" },
   { label: "Methodology", href: "/methodology", hint: "page" },
   { label: "API docs", href: "/docs", hint: "page" },
@@ -91,11 +96,17 @@ export default function CommandTrigger() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Open command palette"
-        className="transition-paddock hidden h-9 items-center gap-2 rounded-md border hairline px-2.5 text-ink-faint hover:text-ink hover:border-line-strong sm:inline-flex"
+        aria-label="Open command palette and navigation menu"
+        className="transition-paddock inline-flex h-9 items-center gap-2 rounded-md border hairline px-2.5 text-ink-faint hover:text-ink hover:border-line-strong"
       >
-        <span className="type-micro">Search</span>
-        <kbd className="type-micro rounded border hairline px-1 py-0.5 leading-none">⌘K</kbd>
+        {/* On mobile this is the only navigation, so the trigger is always visible (an icon on
+            phones, the labelled Search affordance on wider screens). */}
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden className="md:hidden">
+          <circle cx="7" cy="7" r="4.5" />
+          <path d="M13.5 13.5 10.5 10.5" strokeLinecap="round" />
+        </svg>
+        <span className="type-micro hidden md:inline">Search</span>
+        <kbd className="type-micro hidden rounded border hairline px-1 py-0.5 leading-none md:inline-block">⌘K</kbd>
       </button>
 
       {open && (

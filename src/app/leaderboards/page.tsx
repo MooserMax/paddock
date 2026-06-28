@@ -4,6 +4,8 @@ import { api } from "@/lib/api/client";
 import type { LeaderboardMetric, LeaderboardResponse } from "@/lib/api/types";
 import LeaderboardTable from "@/components/leaderboards/LeaderboardTable";
 import LeaderboardTabs from "@/components/leaderboards/LeaderboardTabs";
+import SpenderBoard from "@/components/leaderboards/SpenderBoard";
+import { getItemLeaderboardSnapshot } from "@/lib/api/queries";
 
 export const metadata: Metadata = {
   title: "Leaderboards",
@@ -24,6 +26,24 @@ const METRICS: { key: LeaderboardMetric; label: string }[] = [
 
 export default async function LeaderboardsPage(props: { searchParams: Promise<{ metric?: string }> }) {
   const searchParams = await props.searchParams;
+
+  // Top spenders is a sibling board within the same tab family: same page, no route change.
+  // It reads the precomputed on-chain item-spend snapshot (no chain at request time) and
+  // degrades to a clean "coming soon" until the indexer has run.
+  if (searchParams.metric === "spenders") {
+    const spenderBoard = await getItemLeaderboardSnapshot();
+    return (
+      <div className="mx-auto max-w-page px-4 py-8 md:px-6 md:py-12">
+        <header className="mb-6">
+          <p className="eyebrow">On-chain item spend</p>
+          <h1 className="type-page-title mt-2 text-ink">Leaderboards</h1>
+        </header>
+        <LeaderboardTabs active="spenders" />
+        <SpenderBoard board={spenderBoard} />
+      </div>
+    );
+  }
+
   const metric = (METRICS.find((m) => m.key === searchParams.metric)?.key ?? "cq") as LeaderboardMetric;
   let board: LeaderboardResponse | null = null;
   try {

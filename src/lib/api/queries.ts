@@ -1855,3 +1855,29 @@ export async function getRecentWins(limit = 12): Promise<import("./types").Recen
 
   return { wins, ethUsd, fetchedAt };
 }
+
+// ---- On-chain item spend (precomputed snapshots, read-only, no chain) --------
+// Light reads of the materialized item-spend aggregates from sync_state. Keys are inlined so
+// these stay free of the chain-heavy ingest module. Item spend is native ETH (18 decimals).
+export interface ItemSpendHome { itemsBought: number; spendEthWei: string; uniqueBuyers: number }
+
+export async function getItemSpendHomeStats(): Promise<ItemSpendHome | null> {
+  const { data } = await db().from("sync_state").select("value").eq("key", "item_stats_v1").maybeSingle();
+  const v = data?.value as { totalSpendWei?: string; itemsBought?: number; uniqueBuyers?: number; pricedPurchases?: number } | undefined;
+  if (!v || !v.pricedPurchases) return null; // omit until there is real, priced spend
+  return { itemsBought: v.itemsBought ?? 0, spendEthWei: v.totalSpendWei ?? "0", uniqueBuyers: v.uniqueBuyers ?? 0 };
+}
+
+export interface SpenderRow {
+  rank: number; address: string; username: string | null;
+  totalSpendWei: string; totalSpendEth: string; itemsBought: number;
+  byItem: { itemId: number; spendEth: string; quantity: number }[];
+}
+export interface SpenderBoardData { spenders: SpenderRow[]; uniqueBuyers: number; generatedAt: string }
+
+export async function getItemLeaderboardSnapshot(): Promise<SpenderBoardData | null> {
+  const { data } = await db().from("sync_state").select("value").eq("key", "item_leaderboard_v1").maybeSingle();
+  const v = data?.value as SpenderBoardData | undefined;
+  if (!v || !v.spenders?.length) return null;
+  return v;
+}

@@ -1,11 +1,12 @@
 import Link from "next/link";
 import NavLink from "./NavLink";
+import NavDropdown from "./NavDropdown";
 import ThemeToggle from "./ThemeToggle";
 import CommandTrigger from "./CommandTrigger";
 import DocsDropdown from "./DocsDropdown";
 import StableNavItem from "./StableNavItem";
 import WalletPill from "./WalletPill";
-import { NAV_ROUTES } from "@/lib/nav";
+import { NAV_GROUPS, WALLET_ROUTE } from "@/lib/nav";
 
 export default function Nav() {
   return (
@@ -19,22 +20,12 @@ export default function Nav() {
         </Link>
 
         <div className="hidden items-center gap-6 md:flex">
-          {NAV_ROUTES.map((l) =>
-            l.ready ? (
-              <NavLink key={l.href} href={l.href}>
-                {l.label}
-              </NavLink>
-            ) : (
-              <span
-                key={l.href}
-                aria-disabled="true"
-                title="Coming soon"
-                className="type-micro cursor-not-allowed uppercase tracking-wider text-ink-faint opacity-40"
-              >
-                {l.label}
-              </span>
-            )
-          )}
+          {/* Consolidated: Races and Intel dropdowns, then the direct Wallet link. Every
+              destination stays reachable here and in the command palette (the mobile path). */}
+          {NAV_GROUPS.map((g) => (
+            <NavDropdown key={g.label} label={g.label} routes={g.routes} />
+          ))}
+          <NavLink href={WALLET_ROUTE.href}>{WALLET_ROUTE.label}</NavLink>
           {/* Stable, shown only when a wallet is connected. */}
           <StableNavItem />
           {/* Docs dropdown groups Odds, Methodology, API. */}
