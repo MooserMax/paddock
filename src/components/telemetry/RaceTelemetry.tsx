@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { RaceTelemetryData } from "@/lib/api/types";
 import { ordinal } from "@/lib/format";
+import { useWalletAddress } from "@/lib/walletFlag";
 
 // RACE TELEMETRY: a restrained, side-scroll race visualization rendered from real
 // per-tick data. Camera from the side; one lane per runner; x = real meters / track
@@ -103,16 +104,50 @@ function ProgressTime({ ms }: { ms: number }) {
   return <span>{s.toFixed(1)}s</span>;
 }
 
-export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, raceTitle }: {
+export default function RaceTelemetry({ data, heroPetId, modelRanks, raceTitle }: {
   data: RaceTelemetryData;
-  heroPetId: number;
-  heroLabel: string;
-  modelRank: number | null;
+  heroPetId: number; // server-featured spotlight (the best story); NOT an ownership claim
+  modelRanks: Record<number, number>; // predicted finishing rank per pet id (from the odds model)
   raceTitle: string;
 }) {
   const N = data.numPets;
-  const heroIndex = useMemo(() => data.pets.findIndex((p) => p.id === heroPetId), [data.pets, heroPetId]);
+
+  // OWNERSHIP is the ONLY basis for the "YOU" marker: the connected wallet's horses that
+  // are actually entrants in THIS race. Source: the race detail entrants' ownerAddress (the
+  // same ownership Paddock uses elsewhere). No wallet, or no owned entrant, means no YOU.
+  const wallet = useWalletAddress();
+  const [myPetIds, setMyPetIds] = useState<Set<number>>(() => new Set());
+  const myPetIdsRef = useRef<Set<number>>(new Set());
+  useEffect(() => { myPetIdsRef.current = myPetIds; }, [myPetIds]);
+  useEffect(() => {
+    if (!wallet) { setMyPetIds(new Set()); return; }
+    let alive = true; const w = wallet.toLowerCase();
+    fetch(`/api/v1/race/${data.raceId}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { entrants?: { petId: number; ownerAddress: string | null }[] } | null) => {
+        if (!alive || !d?.entrants) return;
+        setMyPetIds(new Set(d.entrants.filter((e) => (e.ownerAddress ?? "").toLowerCase() === w).map((e) => e.petId)));
+      })
+      .catch(() => { /* ownership unknown, so no YOU */ });
+    return () => { alive = false; };
+  }, [wallet, data.raceId]);
+
+  // SPOTLIGHT: a featured runner so there is always a hero to follow. When the user owns an
+  // entrant, prefer THEIR best-finishing owned horse as the spotlight (so it carries the
+  // model-vs-result framing); otherwise the server-featured pick. Being the spotlight is not
+  // an ownership claim on its own.
+  const effectiveHeroId = useMemo(() => {
+    if (myPetIds.size === 0) return heroPetId;
+    let best: number | null = null, bestRank = Infinity;
+    for (const p of data.pets) if (myPetIds.has(p.id) && p.finalRank < bestRank) { bestRank = p.finalRank; best = p.id; }
+    return best ?? heroPetId;
+  }, [myPetIds, data.pets, heroPetId]);
+  const heroIsYours = myPetIds.has(effectiveHeroId);
+  const heroLabel = heroIsYours ? "Your runner" : "Spotlight";
+
+  const heroIndex = useMemo(() => data.pets.findIndex((p) => p.id === effectiveHeroId), [data.pets, effectiveHeroId]);
   const heroFinalRank = heroIndex >= 0 ? data.pets[heroIndex].finalRank : 1;
+  const modelRank = modelRanks[effectiveHeroId] ?? null;
 
   // Stable per-pet visual assignments: lane by final rank (winner on top), cool color
   // for the field, the one warm hero.
@@ -294,7 +329,8 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
       ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
       ctx.shadowColor = "rgba(0,0,0,0.9)"; ctx.shadowBlur = 3;
       ctx.fillStyle = isHero ? HERO_GLOW : color; ctx.globalAlpha = isHero ? 1 : 0.6;
-      ctx.fillText(isHero ? `#${petId} YOU` : `#${petId}`, x, headY - headR - labelFs * 0.45);
+      // "YOU" ONLY when the connected wallet owns this entrant (ownership, not spotlight).
+      ctx.fillText(myPetIdsRef.current.has(petId) ? `#${petId} YOU` : `#${petId}`, x, headY - headR - labelFs * 0.45);
       ctx.restore();
 
       // finishing-order badge on the podium and the spotlight, only at the finish (Fix 4):
@@ -427,13 +463,13 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
         <p className="type-micro mt-1 tracking-[0.18em] text-ink-faint">The Open Intelligence Layer</p>
       </div>
 
-      {/* hero telemetry panel: frame-accurate. RUNNING + a live status until the finish,
-          then RESULT + the verdict. MODEL EXPECTED shows throughout. */}
+      {/* hero telemetry panel (left): the live RUNNING placing + status while the race plays.
+          It fades out at the finish so the centered result has clean, empty space. */}
       {heroIndex >= 0 && (
-        <div className="pointer-events-none absolute left-7" style={{ top: "50%", transform: "translateY(-50%)", width: "min(248px, 20vw)" }}>
+        <div className="pointer-events-none absolute left-7 transition-opacity duration-500" style={{ top: "50%", transform: "translateY(-50%)", width: "min(248px, 20vw)", opacity: showResult ? 0 : 1 }} aria-hidden={showResult}>
           <p className="type-micro uppercase tracking-[0.2em]" style={{ color: CYAN }}>{heroLabel}</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums" style={{ color: HERO_GLOW }}>#{heroPetId}</p>
-          <p className="type-micro mt-0.5 normal-case text-ink-soft">{showResult ? "result is in" : hud.status}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums" style={{ color: HERO_GLOW }}>#{effectiveHeroId}</p>
+          <p className="type-micro mt-0.5 normal-case text-ink-soft">{hud.status}</p>
 
           <div className="mt-4 space-y-1.5">
             {modelRank != null && (
@@ -443,40 +479,46 @@ export default function RaceTelemetry({ data, heroPetId, heroLabel, modelRank, r
               </div>
             )}
             <div className="flex items-baseline gap-2">
-              <span className="type-micro uppercase tracking-wider text-ink-faint">{showResult ? "Result" : "Running"}</span>
-              <span className="text-lg font-semibold tabular-nums" style={{ color: showResult ? GOLD : HERO_CORE }}>{ordinal(showResult ? heroFinalRank : hud.liveRank)}</span>
+              <span className="type-micro uppercase tracking-wider text-ink-faint">Running</span>
+              <span className="text-lg font-semibold tabular-nums" style={{ color: HERO_CORE }}>{ordinal(hud.liveRank)}</span>
             </div>
-            {showResult && <p className="type-micro normal-case text-ink-soft">{verdict}</p>}
           </div>
         </div>
       )}
 
-      {/* RESULT payoff: fades in at the finish only (never on load). WON BY + the real
-          finishing order, the spotlight runner in brick, plus a Replay. */}
+      {/* RESULT payoff: fades in at the finish ONLY, CENTERED in the open space so it never
+          collides with the runners piled at the finish line on the right. WON BY + the real
+          finishing order (spotlight in brick, crown on the winner) + the model-vs-result
+          insight + Replay. */}
       <div
-        className="absolute right-7 transition-opacity duration-500"
-        style={{ top: "46%", transform: "translateY(-50%)", width: "min(230px, 22vw)", opacity: showResult ? 1 : 0, pointerEvents: showResult ? "auto" : "none" }}
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-center transition-opacity duration-500"
+        style={{ width: "min(380px, 82vw)", opacity: showResult ? 1 : 0, pointerEvents: showResult ? "auto" : "none" }}
         aria-hidden={!showResult}
       >
-        <p className="type-micro uppercase tracking-[0.2em] text-right" style={{ color: GOLD }}>Result</p>
+        <p className="type-micro uppercase tracking-[0.25em]" style={{ color: GOLD }}>Result</p>
         {winnerId != null && (
-          <p className="mt-1 text-right font-serif text-2xl leading-none" style={{ color: winnerId === heroPetId ? HERO_GLOW : GOLD }}>
+          <p className="mt-2 font-serif text-3xl leading-none md:text-4xl" style={{ color: myPetIds.has(winnerId) ? HERO_GLOW : GOLD }}>
             Won by #{winnerId}
           </p>
         )}
-        <ol className="mt-3 space-y-1">
+        {modelRank != null && heroIndex >= 0 && (
+          <p className="type-micro mx-auto mt-3 max-w-[300px] normal-case text-ink-soft">
+            {heroIsYours ? "Your runner" : "Spotlight"} #{effectiveHeroId}: model expected {ordinal(modelRank)}, finished {ordinal(heroFinalRank)}. {verdict}.
+          </p>
+        )}
+        <ol className="mx-auto mt-4 inline-flex flex-col gap-1 text-left tabular-nums">
           {finishOrder.map((f) => (
-            <li key={f.id} className="flex items-baseline justify-end gap-2 tabular-nums">
-              {f.place === 1 && <span aria-hidden style={{ color: GOLD }}>♔</span>}
+            <li key={f.id} className="flex items-baseline gap-2">
+              <span aria-hidden className="w-3 text-center" style={{ color: GOLD }}>{f.place === 1 ? "♔" : ""}</span>
               <span className="type-micro uppercase tracking-wider text-ink-faint">{ordinal(f.place)}</span>
-              <span className="type-data" style={{ color: f.id === heroPetId ? HERO_GLOW : f.place === 1 ? GOLD : colorById.get(f.id) ?? "var(--ink-soft)" }}>#{f.id}</span>
+              <span className="type-data" style={{ color: f.id === effectiveHeroId ? HERO_GLOW : f.place === 1 ? GOLD : colorById.get(f.id) ?? "var(--ink-soft)" }}>#{f.id}{myPetIds.has(f.id) ? " · you" : ""}</span>
             </li>
           ))}
         </ol>
         <button
           type="button"
           onClick={onReplay}
-          className="transition-paddock mt-4 ml-auto block rounded-md border px-3 py-1.5 text-ink-soft hover:border-glow hover:text-glow"
+          className="transition-paddock mx-auto mt-4 block rounded-md border px-3 py-1.5 text-ink-soft hover:border-glow hover:text-glow"
           style={{ borderColor: "var(--line-strong)" }}
         >
           <span className="type-micro uppercase tracking-wider">Replay ↺</span>

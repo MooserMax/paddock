@@ -59,8 +59,9 @@ export default async function TelemetryPage(props: { params: Promise<{ id: strin
     }
     heroId = best ?? data.finalRanking[0] ?? data.pets[0]?.id;
   }
-  const heroLabel = petParam && heroId === petParam ? "Your runner" : "Spotlight";
-  const modelRank = modelRankByPet.get(heroId) ?? null;
+  // The component decides "your runner" vs "spotlight" from real ownership client-side, so
+  // we pass the whole predicted-rank map (it can score whichever horse becomes the spotlight).
+  const modelRanks = Object.fromEntries(modelRankByPet);
 
   return (
     <div className="mx-auto max-w-[1440px] px-3 py-6 md:px-6 md:py-8">
@@ -68,7 +69,7 @@ export default async function TelemetryPage(props: { params: Promise<{ id: strin
         <Link href={`/race/${raceId}`} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Back to recap</Link>
         <Link href={`/api/v1/race/${raceId}/telemetry`} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-ink">Served by /api/v1/race/{raceId}/telemetry</Link>
       </div>
-      <RaceTelemetry key={`tel-${raceId}`} data={data} heroPetId={heroId} heroLabel={heroLabel} modelRank={modelRank} raceTitle={`Race #${raceId}`} />
+      <RaceTelemetry key={`tel-${raceId}`} data={data} heroPetId={heroId} modelRanks={modelRanks} raceTitle={`Race #${raceId}`} />
     </div>
   );
 }
