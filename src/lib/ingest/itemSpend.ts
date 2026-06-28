@@ -27,6 +27,24 @@ export const ITEM_LEADERBOARD_KEY = "item_leaderboard_v1";
 
 const CHUNK = 9000n; // <= 9k blocks per getLogs; fetchItemLogs halves further on the 10k cap
 
+// PostgREST caps a SELECT at 1000 rows. Aggregation must read EVERY row, so page through with
+// a stable, unique ordering (else page boundaries drop or duplicate rows). Without this the
+// totals silently reflect only the first 1000 purchases.
+async function readAllRows<T = Record<string, unknown>>(table: string, columns: string, orderCols: string[]): Promise<T[]> {
+  const PAGE = 1000;
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    let q = db().from(table).select(columns).range(from, from + PAGE - 1);
+    for (const c of orderCols) q = q.order(c, { ascending: true });
+    const { data, error } = await q;
+    if (error) throw new Error(`${table} paged read failed: ${error.message}`);
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
+
 interface ListingPrice { price: bigint; itemId: number }
 
 // Load prices for the referenced listings from the DB. A purchase's listing was always
@@ -130,10 +148,10 @@ async function fetchUsername(address: string): Promise<string | null> {
 }
 
 export async function resolveBuyerUsernames(limit = 200, concurrency = 6): Promise<number> {
-  const { data: buyerRows } = await db().from("item_purchases").select("buyer");
-  const uniq = [...new Set((buyerRows ?? []).map((b) => b.buyer as string))];
-  const { data: known } = await db().from("item_accounts").select("address");
-  const knownSet = new Set((known ?? []).map((k) => k.address as string));
+  const buyerRows = await readAllRows<{ buyer: string }>("item_purchases", "buyer", ["block_number", "log_index"]);
+  const uniq = [...new Set(buyerRows.map((b) => b.buyer))];
+  const known = await readAllRows<{ address: string }>("item_accounts", "address", ["address"]);
+  const knownSet = new Set(known.map((k) => k.address));
   const todo = uniq.filter((a) => !knownSet.has(a)).slice(0, limit);
 
   let next = 0, resolved = 0;
@@ -188,13 +206,14 @@ export interface ItemLeaderboardAgg {
 // Aggregate all priced purchases (integer wei) into the two materialized snapshots and store
 // them in sync_state. Small data (purchases are sparse); BigInt sums throughout.
 export async function materializeItemAggregates(): Promise<{ stats: ItemStatsAgg; leaderboard: ItemLeaderboardAgg }> {
-  const { data: rows, error } = await db()
-    .from("item_purchases")
-    .select("item_id, buyer, quantity, spend_wei, block_number");
-  if (error) throw new Error(`item_purchases read failed: ${error.message}`);
+  const rows = await readAllRows<{ item_id: number | null; buyer: string; quantity: number; spend_wei: string | null; block_number: number }>(
+    "item_purchases",
+    "item_id, buyer, quantity, spend_wei, block_number",
+    ["block_number", "log_index"]
+  );
 
-  const { data: accs } = await db().from("item_accounts").select("address, username");
-  const nameMap = new Map((accs ?? []).map((a) => [a.address as string, (a.username as string | null) ?? null]));
+  const accs = await readAllRows<{ address: string; username: string | null }>("item_accounts", "address, username", ["address"]);
+  const nameMap = new Map(accs.map((a) => [a.address, a.username ?? null]));
 
   const cursor = await getSyncState<{ lastBlock: string }>(CURSOR_KEY);
 
