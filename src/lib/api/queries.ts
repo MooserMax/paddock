@@ -1883,3 +1883,14 @@ export async function getItemLeaderboardSnapshot(): Promise<SpenderBoardData | n
   if (!v || !v.spenders?.length) return null;
   return v;
 }
+
+// Total player gas spent on race create + enter txs (native ETH, summed real receipts). Gated
+// on backfill completion (cursor reached head) so a partial range never shows as "all time".
+export interface RaceGasHome { feeEthWei: string; txCount: number }
+
+export async function getRaceGasHomeStat(): Promise<RaceGasHome | null> {
+  const { data } = await db().from("sync_state").select("value").eq("key", "race_gas_v1").maybeSingle();
+  const v = data?.value as { totalFeeWei?: string; txCount?: number; complete?: boolean } | undefined;
+  if (!v || !v.complete || !v.txCount) return null;
+  return { feeEthWei: v.totalFeeWei ?? "0", txCount: v.txCount };
+}

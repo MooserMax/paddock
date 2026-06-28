@@ -9,6 +9,7 @@ import { materializeStableSkill } from "@/lib/ingest/stableSkill";
 import { syncAccounts } from "@/lib/ingest/accounts";
 import { materializeRecords } from "@/lib/ingest/records";
 import { runItemSpendCron } from "@/lib/ingest/itemSpend";
+import { runRaceGasCron } from "@/lib/ingest/raceGas";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +55,11 @@ const RECORDS_LAST_RUN_KEY = "records_last_run";
 const ITEM_SPEND_MIN_INTERVAL_MS = 10 * 60_000;
 const ITEM_SPEND_START_BY_MS = 30_000; // only begin item-spend this early in the cycle
 const ITEM_SPEND_LAST_RUN_KEY = "item_spend_last_run";
+// Race gas fees: same gated pattern, interval offset from item-spend so the two materializes
+// rarely land in the same cycle, and a tighter early-start so it only runs with good headroom.
+const RACE_GAS_MIN_INTERVAL_MS = 11 * 60_000;
+const RACE_GAS_START_BY_MS = 22_000;
+const RACE_GAS_LAST_RUN_KEY = "race_gas_last_run";
 const LOCK_KEY = "ingest_lock";
 const LOCK_TTL_MS = 90_000; // a crashed run self-releases after this
 
@@ -211,6 +217,27 @@ export async function GET(req: NextRequest) {
       }
     } else {
       steps.itemSpendSkipped = "soft deadline";
+    }
+
+    // 3d. Player race gas fees: advance the cursor over the small per-cycle block delta and
+    //     re-sum the snapshot. Same gated reliable-cadence pattern as records/item-spend, with
+    //     an offset interval and tighter early-start so it only runs with spare budget.
+    //     Idempotent (tx_hash) and fault isolated.
+    if (timeLeft()) {
+      try {
+        const lastGas = await getSyncState<{ at: number }>(RACE_GAS_LAST_RUN_KEY);
+        const dueGas = !lastGas || t0 - (lastGas.at ?? 0) >= RACE_GAS_MIN_INTERVAL_MS;
+        if (dueGas && Date.now() < t0 + RACE_GAS_START_BY_MS) {
+          steps.raceGas = await runRaceGasCron({ mode: "incremental", budgetMs: 8_000 });
+          await setSyncState(RACE_GAS_LAST_RUN_KEY, { at: Date.now() });
+        } else {
+          steps.raceGasSkipped = dueGas ? "deadline" : "interval";
+        }
+      } catch (e) {
+        steps.raceGasError = msg(e);
+      }
+    } else {
+      steps.raceGasSkipped = "soft deadline";
     }
 
     // 4. Resolve Gigaverse usernames for a small slice of displayed owners, in

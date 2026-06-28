@@ -6,7 +6,7 @@ import GettingStarted from "@/components/home/GettingStarted";
 import RarityBadge from "@/components/RarityBadge";
 import RecentWins from "@/components/home/RecentWins";
 import GlobalStats from "@/components/home/GlobalStats";
-import { getRecentWins, getItemSpendHomeStats, type ItemSpendHome } from "@/lib/api/queries";
+import { getRecentWins, getItemSpendHomeStats, getRaceGasHomeStat, type ItemSpendHome, type RaceGasHome } from "@/lib/api/queries";
 import { fetchGigaStats, type GigaStats } from "@/lib/telemetry";
 import { formatScore, formatPct } from "@/lib/format";
 
@@ -18,8 +18,9 @@ export default async function Home() {
   let recentWins: RecentWinsResponse = { wins: [], ethUsd: null, fetchedAt: new Date().toISOString() };
   let giga: GigaStats | null = null;
   let itemStats: ItemSpendHome | null = null;
+  let raceGas: RaceGasHome | null = null;
   try {
-    [stats, board, recentWins, giga, itemStats] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats(), getItemSpendHomeStats()]);
+    [stats, board, recentWins, giga, itemStats, raceGas] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats(), getItemSpendHomeStats(), getRaceGasHomeStat()]);
   } catch {
     // The hero still renders without live numbers; never a blank crash.
   }
@@ -47,7 +48,7 @@ export default async function Home() {
       </section>
 
       {/* Global Stats showcase: the macro numbers, screenshottable, self-branding. */}
-      <GlobalStats site={stats} giga={giga} itemStats={itemStats} />
+      <GlobalStats site={stats} giga={giga} itemStats={itemStats} raceGas={raceGas} />
 
       {/* Recent paid-race wins: live money moving, the social proof slot. */}
       <RecentWins initial={recentWins} />

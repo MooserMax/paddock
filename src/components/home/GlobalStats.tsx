@@ -19,11 +19,18 @@ export interface GlobalItemStats {
   uniqueBuyers: number;
 }
 
+// Total player gas (transaction fees) spent creating and entering races, summed from real
+// receipts. SEPARATE from entry-fee volume (ETH staked) and item spend.
+export interface GlobalRaceGas {
+  feeEthWei: string;
+  txCount: number;
+}
+
 type Stat = { value: string; label: string; sub?: string; accent?: string };
 
 const ethStr = (wei: string | number, dp: number) => formatEth(Number(wei) / 1e18, dp);
 
-export default function GlobalStats({ site, giga, itemStats }: { site: SiteStats | null; giga: GigaStats | null; itemStats?: GlobalItemStats | null }) {
+export default function GlobalStats({ site, giga, itemStats, raceGas }: { site: SiteStats | null; giga: GigaStats | null; itemStats?: GlobalItemStats | null; raceGas?: GlobalRaceGas | null }) {
   if (!site && !giga) return null;
 
   const stats: Stat[] = [];
@@ -42,6 +49,10 @@ export default function GlobalStats({ site, giga, itemStats }: { site: SiteStats
   if (itemStats) {
     stats.push({ value: formatInt(itemStats.itemsBought), label: "Items bought" });
     stats.push({ value: ethStr(itemStats.spendEthWei, 5), label: "Item spend", accent: "var(--gold)" });
+  }
+  if (raceGas) {
+    // Gas/transaction fees to create + enter races. Distinct from entry-fee volume and item spend.
+    stats.push({ value: ethStr(raceGas.feeEthWei, 4), label: "Player gas fees", sub: "create + enter, all time", accent: "var(--gold)" });
   }
 
   return (
@@ -63,9 +74,9 @@ export default function GlobalStats({ site, giga, itemStats }: { site: SiteStats
           ))}
         </div>
 
-        {site && site.racesAbandoned > 0 && (
+        {site && (
           <p className="type-micro px-6 pt-4 normal-case text-ink-faint md:px-8">
-            Races run counts races that actually filled and ran. A further {formatInt(site.racesAbandoned)} were created but never drew enough entrants to start, counted separately rather than inflating the total.
+            Races run only counts races that actually filled &amp; ran.
           </p>
         )}
 
