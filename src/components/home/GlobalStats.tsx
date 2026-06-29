@@ -53,7 +53,7 @@ export default function GlobalStats({ site, giga, itemStats, raceGas, ethUsd }: 
     stats.push({ value: ethStr(giga.totalEntryFeeVolumeWei, 3), label: "Entry-fee volume", accent: "var(--gold)" });
     if (giga.jackpotPoolWei) stats.push({ value: ethStr(giga.jackpotPoolWei, 3), label: "Jackpot pool", sub: `${giga.jackpotWins} won so far`, accent: "var(--gold)" });
   }
-  if (site?.recentBigSale) stats.push({ value: ethStr(site.recentBigSale.priceEth * 1e18, 3), label: "Top recent sale", accent: "var(--gold)" });
+  // Top recent sale intentionally omitted from this panel (removed for layout balance).
   if (itemStats) {
     // Racing consumables only (dung + butterfly), with the dung vs butterfly split as the sub.
     stats.push({ value: formatInt(itemStats.itemsBought), label: "Race items bought", sub: "dung + butterfly" });
@@ -92,7 +92,9 @@ export default function GlobalStats({ site, giga, itemStats, raceGas, ethUsd }: 
           <p className="type-micro mt-1.5 normal-case text-ink-faint">All time, from on-chain and Gigaverse data. Live.</p>
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-px md:grid-cols-4" style={{ background: "var(--line)" }}>
+        {/* 12 tiles in a 3-up desktop grid = 4 full rows, no trailing empty cell; the three
+            Abstract-economics stats (pushed last) form the final row: gas fees, margin, profit. */}
+        <div className="mt-6 grid grid-cols-2 gap-px md:grid-cols-3" style={{ background: "var(--line)" }}>
           {stats.map((s, i) => (
             <div key={i} className="px-6 py-6 md:px-8 md:py-7" style={{ background: "var(--paper-raised)" }}>
               <p className="font-serif text-3xl leading-none tabular-nums md:text-4xl" style={{ color: s.accent ?? "var(--ink)" }}>{s.value}</p>
