@@ -1,83 +1,90 @@
-import { db } from "../db";
+import type { Hex } from "viem";
 import { setSyncState } from "../syncState";
+import { chainClient, latestBlock } from "../chain";
+import { blockTimestamp } from "../itemMarket";
 
 // Trailing-24h PAID racing volume = entry fees STAKED into paid races in the last 24 hours
-// (money IN, not payouts). Derived from already-indexed data, consistent with the all-time
-// "Entry-fee volume" stat: per paid entry the fee is its race's entry_fee_wei, so the volume is
-// sum(entry_fee_wei x entry_count) over paid races (entry_fee_wei > 0) resolved in the window.
-// Free/zero-fee develop races are excluded by the entry_fee_wei > 0 filter. Integer wei; ETH is
-// derived for display, USD only at the panel from the live rate. Recomputed each cron tick so
-// the trailing window slides (races older than 24h drop out).
+// (money IN, NOT payouts). Measured on-chain, cheaply and exactly: on Abstract/ZKsync the entry
+// fee is a native-ETH Transfer (emitted by the 0x800a base-token system contract) whose
+// recipient is a racing contract. So we eth_getLogs those Transfers filtered by to=race contract
+// (topic filter, no receipts) over the last 24h and sum the amounts in integer wei. Gas (to the
+// bootloader) and payouts (from the contract) are excluded by the to-address filter; free/
+// zero-fee develop races transfer nothing, so they contribute nothing. ETH only at display; USD
+// at the panel from the live rate. Recomputed each cron tick so the trailing window slides.
 //
-// Cross-checked against an independent on-chain scan (RACE_JOINED entry-fee transfers to the
-// three racing contracts) which gave ~0.062 ETH over the same window. This DB figure uses the
-// base entry fee (the on-chain transfer also carries the ~1% juiced protocol surcharge), and
-// windows on resolved_at rather than exact join-block time, so it tracks the same magnitude.
+// Verified: this matches an independent receipt-based scan of RACE_JOINED txs (same entry-fee
+// transfers), and a sample entry decodes to 0.000505 ETH = 0.0005 base x 1.01 juiced protocol.
 
 export const PAID_VOLUME_KEY = "paid_volume_24h_v1";
+
+const ETH_TOKEN = "0x000000000000000000000000000000000000800a"; // ZKsync base-token (ETH) system contract
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const RACE_CONTRACTS = [
+  "0x16e0b3d6394ce7597d34b73f5e5fb165fd74394e",
+  "0x0ba76cfc1735327e26018bc9aaf680c652e72f82",
+  "0xf6ed2a53f311352c869e268601aae5b78b9a9650",
+];
+const TO_TOPICS = RACE_CONTRACTS.map((a) => `0x000000000000000000000000${a.slice(2)}`);
+const CHUNK = 9000n;
 
 export interface PaidVolume24h {
   volumeWei: string;
   volumeEth: string;
-  paidRaces: number;
   paidEntries: number;
   windowHours: number;
   generatedAt: string;
 }
 
+interface XferLog { data: Hex }
+
+// ETH-in Transfers to the race contracts over [from,to], filtered by the indexed `to` topic so
+// only entry-fee inflows come back (no receipts). Halve-on-cap like the other readers.
+async function fetchEntryFeeTransfers(fromBlock: bigint, toBlock: bigint): Promise<XferLog[]> {
+  if (fromBlock > toBlock) return [];
+  try {
+    return (await chainClient().request({
+      method: "eth_getLogs",
+      params: [
+        {
+          address: ETH_TOKEN as Hex,
+          fromBlock: `0x${fromBlock.toString(16)}`,
+          toBlock: `0x${toBlock.toString(16)}`,
+          topics: [TRANSFER_TOPIC as Hex, null, TO_TOPICS as Hex[]],
+        },
+      ],
+    })) as unknown as XferLog[];
+  } catch (err) {
+    if (toBlock - fromBlock < 1n) throw err;
+    const mid = fromBlock + (toBlock - fromBlock) / 2n;
+    return [...await fetchEntryFeeTransfers(fromBlock, mid), ...await fetchEntryFeeTransfers(mid + 1n, toBlock)];
+  }
+}
+
 function weiToEthStr(wei: bigint, dp = 6): string {
-  const w = wei < 0n ? -wei : wei;
-  return `${wei < 0n ? "-" : ""}${w / 10n ** 18n}.${(w % 10n ** 18n).toString().padStart(18, "0").slice(0, dp)}`;
+  return `${wei / 10n ** 18n}.${(wei % 10n ** 18n).toString().padStart(18, "0").slice(0, dp)}`;
 }
 
 export async function computePaidVolume24h(): Promise<PaidVolume24h> {
-  const cutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const head = Number(await latestBlock());
+  // 24h block window from a seconds-per-block estimate (2 sample blocks).
+  const ref = Math.max(0, head - 200_000);
+  const [tHead, tRef] = await Promise.all([blockTimestamp(head), blockTimestamp(ref)]);
+  const secPerBlock = tHead && tRef && tHead > tRef ? (tHead - tRef) / (head - ref) : 1;
+  const from = BigInt(Math.max(0, head - Math.round(86_400 / secPerBlock)));
 
-  // Paid races resolved in the last 24h (paginated past the 1000-row cap).
-  const races: { race_id: number; entry_fee_wei: string }[] = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await db()
-      .from("races")
-      .select("race_id, entry_fee_wei")
-      .eq("resolved", true)
-      .gt("entry_fee_wei", 0)
-      .gte("resolved_at", cutoff)
-      .order("race_id", { ascending: true })
-      .range(from, from + 999);
-    if (error) throw new Error(`paid-volume races read failed: ${error.message}`);
-    races.push(...((data ?? []) as { race_id: number; entry_fee_wei: string }[]));
-    if (!data || data.length < 1000) break;
+  const logs: XferLog[] = [];
+  for (let cur = from; cur <= BigInt(head); cur += CHUNK) {
+    const end = cur + CHUNK - 1n > BigInt(head) ? BigInt(head) : cur + CHUNK - 1n;
+    logs.push(...await fetchEntryFeeTransfers(cur, end));
   }
 
-  const feeById = new Map(races.map((r) => [r.race_id, BigInt(r.entry_fee_wei)]));
-  const raceIds = races.map((r) => r.race_id);
-
-  // Count the actual paid entries per race (one race_entries row per finisher), sliced so the
-  // race_id IN-list stays short, paginated so no 1000-row truncation.
-  const counts = new Map<number, number>();
-  for (let i = 0; i < raceIds.length; i += 300) {
-    const slice = raceIds.slice(i, i + 300);
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await db()
-        .from("race_entries")
-        .select("race_id")
-        .in("race_id", slice)
-        .order("race_id", { ascending: true })
-        .range(from, from + 999);
-      if (error) throw new Error(`paid-volume entries read failed: ${error.message}`);
-      for (const r of (data ?? []) as { race_id: number }[]) counts.set(r.race_id, (counts.get(r.race_id) ?? 0) + 1);
-      if (!data || data.length < 1000) break;
-    }
-  }
-
-  let vol = 0n, entries = 0;
-  for (const [id, c] of counts) { vol += (feeById.get(id) ?? 0n) * BigInt(c); entries += c; }
+  let vol = 0n;
+  for (const l of logs) vol += BigInt(l.data);
 
   const result: PaidVolume24h = {
     volumeWei: vol.toString(),
     volumeEth: weiToEthStr(vol),
-    paidRaces: races.length,
-    paidEntries: entries,
+    paidEntries: logs.length,
     windowHours: 24,
     generatedAt: new Date().toISOString(),
   };
