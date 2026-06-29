@@ -1913,3 +1913,14 @@ export async function getPaidVolume24h(): Promise<PaidVolume24hHome | null> {
   if (!v || v.volumeWei == null) return null;
   return { volumeWei: v.volumeWei, paidEntries: v.paidEntries ?? 0 };
 }
+
+// GigaJuice revenue (measured on-chain inflows). Gated on reconciliation (summed inflow ==
+// balance + outflow AND backfill complete); null/hidden until reconciled, never a partial number.
+export interface JuiceRevenueHome { allTimeWei: string; w7dWei: string; w24hWei: string; allTimeCount: number }
+
+export async function getJuiceRevenue(): Promise<JuiceRevenueHome | null> {
+  const { data } = await db().from("sync_state").select("value").eq("key", "juice_revenue_v1").maybeSingle();
+  const v = data?.value as { allTimeWei?: string; w7dWei?: string; w24hWei?: string; allTimeCount?: number; reconciled?: boolean } | undefined;
+  if (!v || !v.reconciled) return null;
+  return { allTimeWei: v.allTimeWei ?? "0", w7dWei: v.w7dWei ?? "0", w24hWei: v.w24hWei ?? "0", allTimeCount: v.allTimeCount ?? 0 };
+}

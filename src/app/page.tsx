@@ -7,7 +7,7 @@ import RarityBadge from "@/components/RarityBadge";
 import RecentWins from "@/components/home/RecentWins";
 import GlobalStats from "@/components/home/GlobalStats";
 import PaidRacingVolume from "@/components/home/PaidRacingVolume";
-import { getRecentWins, getItemSpendHomeStats, getRaceGasHomeStat, getPaidVolume24h, type ItemSpendHome, type RaceGasHome, type PaidVolume24hHome } from "@/lib/api/queries";
+import { getRecentWins, getItemSpendHomeStats, getRaceGasHomeStat, getPaidVolume24h, getJuiceRevenue, type ItemSpendHome, type RaceGasHome, type PaidVolume24hHome, type JuiceRevenueHome } from "@/lib/api/queries";
 import { fetchGigaStats, fetchEthUsd, type GigaStats } from "@/lib/telemetry";
 import { formatScore, formatPct } from "@/lib/format";
 
@@ -22,8 +22,9 @@ export default async function Home() {
   let raceGas: RaceGasHome | null = null;
   let ethUsd: number | null = null;
   let paidVol: PaidVolume24hHome | null = null;
+  let juice: JuiceRevenueHome | null = null;
   try {
-    [stats, board, recentWins, giga, itemStats, raceGas, ethUsd, paidVol] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats(), getItemSpendHomeStats(), getRaceGasHomeStat(), fetchEthUsd(), getPaidVolume24h()]);
+    [stats, board, recentWins, giga, itemStats, raceGas, ethUsd, paidVol, juice] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats(), getItemSpendHomeStats(), getRaceGasHomeStat(), fetchEthUsd(), getPaidVolume24h(), getJuiceRevenue()]);
   } catch {
     // The hero still renders without live numbers; never a blank crash.
   }
@@ -51,7 +52,7 @@ export default async function Home() {
       </section>
 
       {/* Global Stats showcase: the macro numbers, screenshottable, self-branding. */}
-      <GlobalStats site={stats} giga={giga} itemStats={itemStats} raceGas={raceGas} ethUsd={ethUsd} />
+      <GlobalStats site={stats} giga={giga} itemStats={itemStats} raceGas={raceGas} juice={juice} ethUsd={ethUsd} />
 
       {/* 24h paid racing volume: its own tile in the band above Recent Wins. */}
       <PaidRacingVolume data={paidVol} ethUsd={ethUsd} />

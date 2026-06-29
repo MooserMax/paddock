@@ -11,6 +11,7 @@ import { materializeRecords } from "@/lib/ingest/records";
 import { runItemSpendCron } from "@/lib/ingest/itemSpend";
 import { runRaceGasCron } from "@/lib/ingest/raceGas";
 import { computePaidVolume24h } from "@/lib/ingest/paidVolume";
+import { runJuiceCron } from "@/lib/ingest/juice";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -248,6 +249,19 @@ export async function GET(req: NextRequest) {
       steps.paidVolume24h = await computePaidVolume24h();
     } catch (e) {
       steps.paidVolume24hError = msg(e);
+    }
+
+    // 3f. GigaJuice revenue: incremental (running inflow/outflow via cursor) + rolling-window
+    //     scan. Cheap after backfill; gated by timeLeft. Fault isolated. (The deploy->head
+    //     backfill is driven via mode=full on /api/cron/juice, not this tick.)
+    if (timeLeft()) {
+      try {
+        steps.juice = (await runJuiceCron({ mode: "incremental" })).snapshot;
+      } catch (e) {
+        steps.juiceError = msg(e);
+      }
+    } else {
+      steps.juiceSkipped = "soft deadline";
     }
 
     // 4. Resolve Gigaverse usernames for a small slice of displayed owners, in

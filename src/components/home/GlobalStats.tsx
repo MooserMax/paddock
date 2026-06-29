@@ -34,11 +34,19 @@ export interface GlobalRaceGas {
   txCount: number;
 }
 
+// GigaJuice revenue paid by players, MEASURED on-chain (inflows to the Juice contract). Not an
+// estimate. Three rolling windows.
+export interface GlobalJuice {
+  w24hWei: string;
+  w7dWei: string;
+  allTimeWei: string;
+}
+
 type Stat = { value: string; label: string; sub?: string; accent?: string };
 
 const ethStr = (wei: string | number, dp: number) => formatEth(Number(wei) / 1e18, dp);
 
-export default function GlobalStats({ site, giga, itemStats, raceGas, ethUsd }: { site: SiteStats | null; giga: GigaStats | null; itemStats?: GlobalItemStats | null; raceGas?: GlobalRaceGas | null; ethUsd?: number | null }) {
+export default function GlobalStats({ site, giga, itemStats, raceGas, juice, ethUsd }: { site: SiteStats | null; giga: GigaStats | null; itemStats?: GlobalItemStats | null; raceGas?: GlobalRaceGas | null; juice?: GlobalJuice | null; ethUsd?: number | null }) {
   if (!site && !giga) return null;
 
   const stats: Stat[] = [];
@@ -81,6 +89,17 @@ export default function GlobalStats({ site, giga, itemStats, raceGas, ethUsd }: 
       stats.push({ value: "~99%", label: "Abstract margin", sub: "est., comparable-L2 (Base, Arbitrum)" });
       stats.push({ value: `${profitEth.toFixed(4)} ETH`, label: "Est. Abstract profit", sub: "estimated", accent: "var(--gold)" });
     }
+  }
+  if (juice) {
+    // GigaJuice revenue, MEASURED on-chain (not an estimate). Bottom row: 24h, 7d, all-time.
+    // ETH is the headline (gold); USD + the "measured" label sit in the sub at the live rate.
+    const usdSub = (wei: string) => {
+      const u = ethUsd && ethUsd > 0 ? formatUsd((Number(wei) / 1e18) * ethUsd) : null;
+      return u ? `${u} · paid by players, on-chain` : "paid by players, on-chain";
+    };
+    stats.push({ value: ethStr(juice.w24hWei, 3), label: "24h Juice sales", sub: usdSub(juice.w24hWei), accent: "var(--gold)" });
+    stats.push({ value: ethStr(juice.w7dWei, 3), label: "7d Juice sales", sub: usdSub(juice.w7dWei), accent: "var(--gold)" });
+    stats.push({ value: ethStr(juice.allTimeWei, 3), label: "All-time Juice sales", sub: usdSub(juice.allTimeWei), accent: "var(--gold)" });
   }
 
   return (
