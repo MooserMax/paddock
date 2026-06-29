@@ -51,7 +51,9 @@ async function enumerate(contract: string): Promise<Buy[]> {
   const seen = new Set<string>();
   const buys: Buy[] = [];
   let startblock = 0;
-  for (let guard = 0; guard < 400; guard++) {
+  // High page guard: never truncate a high-traffic rail mid-scan (the loop's own
+  // rows<PAGE / no-progress conditions are the real terminators; this is only a runaway backstop).
+  for (let guard = 0; guard < 100_000; guard++) {
     const url = `${EXPLORER}?module=account&action=txlist&address=${contract}&startblock=${startblock}&endblock=99999999&page=1&offset=${PAGE}&sort=asc`;
     const j = await getJson(url);
     const rows = Array.isArray(j.result) ? j.result : [];
