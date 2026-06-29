@@ -1902,3 +1902,14 @@ export async function getRaceGasHomeStat(): Promise<RaceGasHome | null> {
   if (!v || !v.complete || !v.txCount) return null;
   return { feeEthWei: v.totalFeeWei ?? "0", txCount: v.txCount };
 }
+
+// Trailing-24h paid racing volume (entry fees staked into paid races, money in). Read-only
+// from the precomputed snapshot; null until the cron has computed it. Shown even at 0.
+export interface PaidVolume24hHome { volumeWei: string; paidRaces: number; paidEntries: number }
+
+export async function getPaidVolume24h(): Promise<PaidVolume24hHome | null> {
+  const { data } = await db().from("sync_state").select("value").eq("key", "paid_volume_24h_v1").maybeSingle();
+  const v = data?.value as { volumeWei?: string; paidRaces?: number; paidEntries?: number } | undefined;
+  if (!v || v.volumeWei == null) return null;
+  return { volumeWei: v.volumeWei, paidRaces: v.paidRaces ?? 0, paidEntries: v.paidEntries ?? 0 };
+}

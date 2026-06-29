@@ -10,6 +10,7 @@ import { syncAccounts } from "@/lib/ingest/accounts";
 import { materializeRecords } from "@/lib/ingest/records";
 import { runItemSpendCron } from "@/lib/ingest/itemSpend";
 import { runRaceGasCron } from "@/lib/ingest/raceGas";
+import { computePaidVolume24h } from "@/lib/ingest/paidVolume";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -238,6 +239,15 @@ export async function GET(req: NextRequest) {
       }
     } else {
       steps.raceGasSkipped = "soft deadline";
+    }
+
+    // 3e. Trailing-24h paid racing volume (entry fees staked into paid races, money in). Cheap:
+    //     a couple of DB reads from already-indexed races/entries, recomputed each tick so the
+    //     24h window slides. Fault isolated; no chain access.
+    try {
+      steps.paidVolume24h = await computePaidVolume24h();
+    } catch (e) {
+      steps.paidVolume24hError = msg(e);
     }
 
     // 4. Resolve Gigaverse usernames for a small slice of displayed owners, in
