@@ -80,10 +80,12 @@ async function readAllRows<T = Record<string, unknown>>(table: string, columns: 
 }
 
 // Which of these tx hashes are already stored (so we never re-fetch a receipt or double-count).
+// Batch small: a tx_hash IN-list goes in the URL query string, and 66-char hashes overflow the
+// PostgREST URL length limit quickly, so keep each IN-list tiny (busy eras have many txs/chunk).
 async function existingTxs(txs: string[]): Promise<Set<string>> {
   const set = new Set<string>();
-  for (let i = 0; i < txs.length; i += 500) {
-    const { data, error } = await db().from("race_gas_fees").select("tx_hash").in("tx_hash", txs.slice(i, i + 500));
+  for (let i = 0; i < txs.length; i += 50) {
+    const { data, error } = await db().from("race_gas_fees").select("tx_hash").in("tx_hash", txs.slice(i, i + 50));
     if (error) throw new Error(`race_gas_fees read failed: ${error.message}`);
     for (const r of data ?? []) set.add(r.tx_hash as string);
   }
