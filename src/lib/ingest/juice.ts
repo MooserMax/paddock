@@ -1,28 +1,35 @@
 import { setSyncState } from "../syncState";
 
-// GigaJuice revenue, measured the authoritative way (matches Dune jdhyper/gigaverse-abstract
-// query 5073984: 440.41 ETH / 41,600 buys). A Juice buy is a successful tx TO one of the two
-// Juice contracts whose input selector is 0x52ce66cc; the tier is calldata word 1 (1-4) and the
-// price is a FIXED table (NOT read from value/transfers, which carry dust + paymaster routing).
-// We enumerate buys via the Abstract explorer txlist (the only source of per-tx calldata), sum
-// fixed prices in integer wei, and bucket by timestamp for rolling 24h/7d windows. Read-only.
+// GigaJuice revenue, measured authoritatively. A Juice buy is a successful tx TO a Juice contract
+// whose input selector is 0x52ce66cc; the tier is calldata word 1 (1-4) and the price is a FIXED
+// table (NOT read from value/transfers: these are AA txs whose ETH is swept onward via an
+// internal call, so the contract's logs/balance/nonce and the 0x800a `to`-topic do NOT reflect
+// revenue, only the per-tx calldata + value do). We enumerate buys via the Abstract explorer
+// txlist (the only source of per-tx calldata), sum fixed prices in integer wei, and bucket by
+// timestamp for rolling 24h/7d windows. Read-only.
 //
-// NOTE: buying paused ~Sept 2025, so the all-time total is frozen and recent windows are 0.
+// TWO RAILS, disjoint and sequential (Juice MOVED contracts on 2026-03-24, it never stopped):
+//   OLD rail (0xD249 + 0xD154): 2025-05-01 -> 2026-03-24, ~41,600 buys, ~440.4 ETH (now frozen).
+//   LIVE rail (0x0e5c, GigaJuiceSystem in /api/contracts): 2026-03-24 -> now, active every day.
+// All-time = old + live (no double-count: different contracts, tx_hash-deduped). 24h/7d come from
+// the live rail (the old rail contributes 0 to recent windows).
 
-const JUICE_CONTRACTS = ["0xd24902e148ccf3e12cd7fbb90a0428b62afabd95", "0xd154ab0de91094bfa8e87808f9a0f7f1b98e1ce1"];
+const OLD_CONTRACTS = ["0xd24902e148ccf3e12cd7fbb90a0428b62afabd95", "0xd154ab0de91094bfa8e87808f9a0f7f1b98e1ce1"];
+const LIVE_CONTRACT = "0x0e5ca01b63acd1841489ca87d0ab33f692e5a7ba";
+const ALL_CONTRACTS = [...OLD_CONTRACTS, LIVE_CONTRACT];
 const SELECTOR = "0x52ce66cc";
 const PRICE_WEI: Record<number, bigint> = { 1: 4_000_000_000_000_000n, 2: 10_000_000_000_000_000n, 3: 23_000_000_000_000_000n, 4: 38_000_000_000_000_000n };
 const EXPLORER = "https://block-explorer-api.mainnet.abs.xyz/api";
 const PAGE = 1000; // explorer caps page*offset <= 1000
-const DUNE_REF_ETH = 440.41;
 
 export const JUICE_SNAPSHOT_KEY = "juice_revenue_v1";
 
 export interface JuiceSnapshot {
   allTimeWei: string; allTimeEth: string; allTimeCount: number; allTimeTiers: Record<number, number>;
+  oldRailEth: string; oldRailCount: number; liveRailEth: string; liveRailCount: number;
   w7dWei: string; w7dEth: string; w7dCount: number;
   w24hWei: string; w24hEth: string; w24hCount: number;
-  reconciled: boolean; duneRefEth: number; generatedAt: string;
+  reconciled: boolean; generatedAt: string;
 }
 
 const ethStr = (wei: bigint, dp = 6) => `${wei / 10n ** 18n}.${(wei % 10n ** 18n).toString().padStart(18, "0").slice(0, dp)}`;
@@ -68,28 +75,36 @@ async function enumerate(contract: string): Promise<Buy[]> {
 }
 
 export async function computeJuiceRevenue(): Promise<JuiceSnapshot> {
-  const all = (await Promise.all(JUICE_CONTRACTS.map(enumerate))).flat();
+  // Enumerate each contract; tag buys by rail for the breakdown. Different contracts/txs, so the
+  // combined total never double-counts (and tx_hash dedup is per-contract).
+  const perContract = await Promise.all(ALL_CONTRACTS.map(async (c) => ({ c, buys: await enumerate(c) })));
   const now = Math.floor(Date.now() / 1000);
 
-  let allWei = 0n, w7 = 0n, w24 = 0n, n7 = 0, n24 = 0;
+  let allWei = 0n, w7 = 0n, w24 = 0n, n7 = 0, n24 = 0, allN = 0;
+  let oldWei = 0n, oldN = 0, liveWei = 0n, liveN = 0;
   const tiers: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
-  for (const b of all) {
-    const p = PRICE_WEI[b.tier];
-    allWei += p; tiers[b.tier]++;
-    if (b.ts >= now - 7 * 86_400) { w7 += p; n7++; }
-    if (b.ts >= now - 86_400) { w24 += p; n24++; }
+  for (const { c, buys } of perContract) {
+    const isLive = c === LIVE_CONTRACT;
+    for (const b of buys) {
+      const p = PRICE_WEI[b.tier];
+      allWei += p; allN++; tiers[b.tier]++;
+      if (isLive) { liveWei += p; liveN++; } else { oldWei += p; oldN++; }
+      if (b.ts >= now - 7 * 86_400) { w7 += p; n7++; }
+      if (b.ts >= now - 86_400) { w24 += p; n24++; }
+    }
   }
 
-  // Gate: only trust the figure once the enumeration is essentially complete (near Dune's
-  // 440 ETH / 41,600). A partial backfill (explorer hiccup) stays below the floor and is hidden.
-  const allEthNum = Number(ethStr(allWei));
-  const reconciled = allEthNum >= DUNE_REF_ETH * 0.97 && all.length >= 41_000;
+  // Gate: render only once the enumeration is complete, which REQUIRES the live rail (old rail is
+  // ~41,600 alone, so total > 42,000 proves the live rail was included). A partial scan stays
+  // below the floor and the row stays hidden.
+  const reconciled = allN >= 42_000 && liveN > 0;
 
   const snapshot: JuiceSnapshot = {
-    allTimeWei: allWei.toString(), allTimeEth: ethStr(allWei), allTimeCount: all.length, allTimeTiers: tiers,
+    allTimeWei: allWei.toString(), allTimeEth: ethStr(allWei), allTimeCount: allN, allTimeTiers: tiers,
+    oldRailEth: ethStr(oldWei), oldRailCount: oldN, liveRailEth: ethStr(liveWei), liveRailCount: liveN,
     w7dWei: w7.toString(), w7dEth: ethStr(w7), w7dCount: n7,
     w24hWei: w24.toString(), w24hEth: ethStr(w24), w24hCount: n24,
-    reconciled, duneRefEth: DUNE_REF_ETH, generatedAt: new Date().toISOString(),
+    reconciled, generatedAt: new Date().toISOString(),
   };
   await setSyncState(JUICE_SNAPSHOT_KEY, snapshot);
   return snapshot;
