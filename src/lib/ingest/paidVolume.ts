@@ -64,13 +64,23 @@ function weiToEthStr(wei: bigint, dp = 6): string {
   return `${wei / 10n ** 18n}.${(wei % 10n ** 18n).toString().padStart(18, "0").slice(0, dp)}`;
 }
 
+// Smallest block whose timestamp >= targetTs, by binary search. Gives an EXACT 24h window
+// regardless of Abstract's variable block time (a seconds-per-block estimate drifts).
+async function blockAtOrAfter(targetTs: number, head: number): Promise<number> {
+  let lo = Math.max(0, head - 300_000); // comfortably more than 24h of blocks
+  let hi = head;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const ts = await blockTimestamp(mid);
+    if (ts != null && ts >= targetTs) hi = mid; else lo = mid + 1;
+  }
+  return lo;
+}
+
 export async function computePaidVolume24h(): Promise<PaidVolume24h> {
   const head = Number(await latestBlock());
-  // 24h block window from a seconds-per-block estimate (2 sample blocks).
-  const ref = Math.max(0, head - 200_000);
-  const [tHead, tRef] = await Promise.all([blockTimestamp(head), blockTimestamp(ref)]);
-  const secPerBlock = tHead && tRef && tHead > tRef ? (tHead - tRef) / (head - ref) : 1;
-  const from = BigInt(Math.max(0, head - Math.round(86_400 / secPerBlock)));
+  const tHead = (await blockTimestamp(head)) ?? Math.floor(Date.now() / 1000);
+  const from = BigInt(await blockAtOrAfter(tHead - 86_400, head)); // exactly 24h of chain time
 
   const logs: XferLog[] = [];
   for (let cur = from; cur <= BigInt(head); cur += CHUNK) {
