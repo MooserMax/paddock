@@ -11,7 +11,7 @@ import { materializeRecords } from "@/lib/ingest/records";
 import { runItemSpendCron } from "@/lib/ingest/itemSpend";
 import { runRaceGasCron } from "@/lib/ingest/raceGas";
 import { computePaidVolume24h } from "@/lib/ingest/paidVolume";
-import { runJuiceCron } from "@/lib/ingest/juice";
+import { computeJuiceRevenue } from "@/lib/ingest/juice";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -62,6 +62,11 @@ const ITEM_SPEND_LAST_RUN_KEY = "item_spend_last_run";
 const RACE_GAS_MIN_INTERVAL_MS = 11 * 60_000;
 const RACE_GAS_START_BY_MS = 22_000;
 const RACE_GAS_LAST_RUN_KEY = "race_gas_last_run";
+// Juice revenue: enumerate via the explorer (~10s); the total is frozen (buying paused), so a
+// slow cadence is plenty, with a tight early-start so it only runs with good headroom.
+const JUICE_MIN_INTERVAL_MS = 30 * 60_000;
+const JUICE_START_BY_MS = 18_000;
+const JUICE_LAST_RUN_KEY = "juice_last_run";
 const LOCK_KEY = "ingest_lock";
 const LOCK_TTL_MS = 90_000; // a crashed run self-releases after this
 
@@ -251,12 +256,19 @@ export async function GET(req: NextRequest) {
       steps.paidVolume24hError = msg(e);
     }
 
-    // 3f. GigaJuice revenue: incremental (running inflow/outflow via cursor) + rolling-window
-    //     scan. Cheap after backfill; gated by timeLeft. Fault isolated. (The deploy->head
-    //     backfill is driven via mode=full on /api/cron/juice, not this tick.)
+    // 3f. GigaJuice revenue: enumerate Juice buys (explorer txlist) and re-bucket the windows.
+    //     ~10s of explorer calls, so gated to a min-interval (the all-time total is frozen since
+    //     buying paused). Fault isolated; no chain access.
     if (timeLeft()) {
       try {
-        steps.juice = (await runJuiceCron({ mode: "incremental" })).snapshot;
+        const lastJuice = await getSyncState<{ at: number }>(JUICE_LAST_RUN_KEY);
+        const dueJuice = !lastJuice || t0 - (lastJuice.at ?? 0) >= JUICE_MIN_INTERVAL_MS;
+        if (dueJuice && Date.now() < t0 + JUICE_START_BY_MS) {
+          steps.juice = await computeJuiceRevenue();
+          await setSyncState(JUICE_LAST_RUN_KEY, { at: Date.now() });
+        } else {
+          steps.juiceSkipped = dueJuice ? "deadline" : "interval";
+        }
       } catch (e) {
         steps.juiceError = msg(e);
       }

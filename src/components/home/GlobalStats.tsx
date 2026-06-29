@@ -91,15 +91,17 @@ export default function GlobalStats({ site, giga, itemStats, raceGas, juice, eth
     }
   }
   if (juice) {
-    // GigaJuice revenue, MEASURED on-chain (not an estimate). Bottom row: 24h, 7d, all-time.
-    // ETH is the headline (gold); USD + the "measured" label sit in the sub at the live rate.
-    const usdSub = (wei: string) => {
-      const u = ethUsd && ethUsd > 0 ? formatUsd((Number(wei) / 1e18) * ethUsd) : null;
-      return u ? `${u} · paid by players, on-chain` : "paid by players, on-chain";
+    // GigaJuice revenue, MEASURED on-chain via the fixed tier-price table (not an estimate).
+    // Bottom row: 24h, 7d, all-time. USD headline (gold) at the live rate; ETH + the measured
+    // label sit in the sub. ETH fallback if no live rate.
+    const juiceTile = (wei: string, label: string): Stat => {
+      const eth = Number(wei) / 1e18;
+      const usd = ethUsd && ethUsd > 0 ? formatUsd(eth * ethUsd) : null;
+      return { value: usd ?? ethStr(wei, 3), label, sub: `${ethStr(wei, 3)} · players buying Juice, on-chain`, accent: "var(--gold)" };
     };
-    stats.push({ value: ethStr(juice.w24hWei, 3), label: "24h Juice sales", sub: usdSub(juice.w24hWei), accent: "var(--gold)" });
-    stats.push({ value: ethStr(juice.w7dWei, 3), label: "7d Juice sales", sub: usdSub(juice.w7dWei), accent: "var(--gold)" });
-    stats.push({ value: ethStr(juice.allTimeWei, 3), label: "All-time Juice sales", sub: usdSub(juice.allTimeWei), accent: "var(--gold)" });
+    stats.push(juiceTile(juice.w24hWei, "24h Juice sales"));
+    stats.push(juiceTile(juice.w7dWei, "7d Juice sales"));
+    stats.push(juiceTile(juice.allTimeWei, "All-time Juice sales"));
   }
 
   return (
