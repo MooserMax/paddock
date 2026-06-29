@@ -7,7 +7,7 @@ import RarityBadge from "@/components/RarityBadge";
 import RecentWins from "@/components/home/RecentWins";
 import GlobalStats from "@/components/home/GlobalStats";
 import { getRecentWins, getItemSpendHomeStats, getRaceGasHomeStat, type ItemSpendHome, type RaceGasHome } from "@/lib/api/queries";
-import { fetchGigaStats, type GigaStats } from "@/lib/telemetry";
+import { fetchGigaStats, fetchEthUsd, type GigaStats } from "@/lib/telemetry";
 import { formatScore, formatPct } from "@/lib/format";
 
 export const revalidate = 60;
@@ -19,8 +19,9 @@ export default async function Home() {
   let giga: GigaStats | null = null;
   let itemStats: ItemSpendHome | null = null;
   let raceGas: RaceGasHome | null = null;
+  let ethUsd: number | null = null;
   try {
-    [stats, board, recentWins, giga, itemStats, raceGas] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats(), getItemSpendHomeStats(), getRaceGasHomeStat()]);
+    [stats, board, recentWins, giga, itemStats, raceGas, ethUsd] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats(), getItemSpendHomeStats(), getRaceGasHomeStat(), fetchEthUsd()]);
   } catch {
     // The hero still renders without live numbers; never a blank crash.
   }
@@ -48,7 +49,7 @@ export default async function Home() {
       </section>
 
       {/* Global Stats showcase: the macro numbers, screenshottable, self-branding. */}
-      <GlobalStats site={stats} giga={giga} itemStats={itemStats} raceGas={raceGas} />
+      <GlobalStats site={stats} giga={giga} itemStats={itemStats} raceGas={raceGas} ethUsd={ethUsd} />
 
       {/* Recent paid-race wins: live money moving, the social proof slot. */}
       <RecentWins initial={recentWins} />

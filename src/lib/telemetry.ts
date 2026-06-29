@@ -167,6 +167,31 @@ export async function fetchGigaStats(): Promise<GigaStats | null> {
   }
 }
 
+// Live ETH/USD spot, server-side and cached (revalidate 600s) so the page never hits the price
+// API per request. Coinbase primary, Kraken fallback. Used only to DERIVE a USD display from the
+// stored ETH source-of-truth; never hardcoded. Returns null if both sources fail (callers then
+// fall back to showing ETH rather than a stale or wrong dollar figure).
+export async function fetchEthUsd(): Promise<number | null> {
+  try {
+    const res = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot", { headers: { accept: "application/json" }, next: { revalidate: 600 } });
+    if (res.ok) {
+      const body = (await res.json()) as { data?: { amount?: string } };
+      const n = Number(body.data?.amount);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch { /* fall through to Kraken */ }
+  try {
+    const res = await fetch("https://api.kraken.com/0/public/Ticker?pair=ETHUSD", { headers: { accept: "application/json" }, next: { revalidate: 600 } });
+    if (res.ok) {
+      const body = (await res.json()) as { result?: Record<string, { c?: string[] }> };
+      const first = body.result ? Object.values(body.result)[0] : undefined;
+      const n = Number(first?.c?.[0]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch { /* both failed */ }
+  return null;
+}
+
 export async function fetchRaceTelemetry(raceId: number): Promise<RaceTelemetryData> {
   const cached = memo.get(raceId);
   if (cached) return cached;

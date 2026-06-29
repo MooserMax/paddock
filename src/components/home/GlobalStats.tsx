@@ -1,6 +1,11 @@
 import type { SiteStats } from "@/lib/api/types";
 import type { GigaStats } from "@/lib/telemetry";
-import { formatInt, formatEth } from "@/lib/format";
+import { formatInt, formatEth, formatUsd } from "@/lib/format";
+
+// Comparable-L2 current-era gross margin (revenue minus L1 settlement cost, over revenue), from
+// growthepie: Base ~99.0%, Arbitrum ~98.8% trailing-year. Abstract is NOT tracked by growthepie,
+// so this is a peer-chain INFERENCE, never presented as Abstract's measured margin.
+const ABSTRACT_MARGIN_EST = 0.99;
 
 // A prominent, screenshottable Global Stats showcase: a titled card grid of the strongest
 // macro numbers, every figure from real verified data (Paddock's own pet/race data plus
@@ -33,7 +38,7 @@ type Stat = { value: string; label: string; sub?: string; accent?: string };
 
 const ethStr = (wei: string | number, dp: number) => formatEth(Number(wei) / 1e18, dp);
 
-export default function GlobalStats({ site, giga, itemStats, raceGas }: { site: SiteStats | null; giga: GigaStats | null; itemStats?: GlobalItemStats | null; raceGas?: GlobalRaceGas | null }) {
+export default function GlobalStats({ site, giga, itemStats, raceGas, ethUsd }: { site: SiteStats | null; giga: GigaStats | null; itemStats?: GlobalItemStats | null; raceGas?: GlobalRaceGas | null; ethUsd?: number | null }) {
   if (!site && !giga) return null;
 
   const stats: Stat[] = [];
@@ -60,8 +65,22 @@ export default function GlobalStats({ site, giga, itemStats, raceGas }: { site: 
     });
   }
   if (raceGas) {
-    // Gas/transaction fees to create + enter races. Distinct from entry-fee volume and item spend.
-    stats.push({ value: ethStr(raceGas.feeEthWei, 4), label: "Player gas fees", sub: "create + enter, all time", accent: "var(--gold)" });
+    // Player gas fees = Abstract's REVENUE on Gigling Racing (create + enter tx fees, measured
+    // on-chain). Shown in USD (derived from the live ETH rate x the stored ETH total, never
+    // hardcoded); falls back to ETH if the rate is unavailable. Abstract margin (~99%) and the
+    // estimated profit are peer-chain INFERENCES, clearly labelled est.
+    const feeEth = Number(raceGas.feeEthWei) / 1e18;
+    const profitEth = feeEth * ABSTRACT_MARGIN_EST;
+    if (ethUsd && ethUsd > 0) {
+      stats.push({ value: formatUsd(feeEth * ethUsd), label: "Player gas fees", sub: "create + enter, all time", accent: "var(--gold)" });
+      stats.push({ value: "~99%", label: "Abstract margin", sub: "est., comparable-L2 (Base, Arbitrum)" });
+      stats.push({ value: formatUsd(profitEth * ethUsd), label: "Est. Abstract profit", sub: "estimated", accent: "var(--gold)" });
+    } else {
+      // Live rate unavailable: show ETH rather than a wrong/blank dollar figure.
+      stats.push({ value: ethStr(raceGas.feeEthWei, 4), label: "Player gas fees", sub: "create + enter, all time", accent: "var(--gold)" });
+      stats.push({ value: "~99%", label: "Abstract margin", sub: "est., comparable-L2 (Base, Arbitrum)" });
+      stats.push({ value: `${profitEth.toFixed(4)} ETH`, label: "Est. Abstract profit", sub: "estimated", accent: "var(--gold)" });
+    }
   }
 
   return (
@@ -86,6 +105,12 @@ export default function GlobalStats({ site, giga, itemStats, raceGas }: { site: 
         {site && (
           <p className="type-micro px-6 pt-4 normal-case text-ink-faint md:px-8">
             Races run only counts races that actually filled &amp; ran.
+          </p>
+        )}
+
+        {raceGas && (
+          <p className="type-micro px-6 pt-2 normal-case text-ink-faint md:px-8">
+            Player gas fees are measured on-chain. Margin and profit are estimated from comparable L2s (Base, Arbitrum) at ~99% current-era gross margin; Abstract-specific profit is not publicly reported. USD at live ETH price. Sources: growthepie, Coinbase.
           </p>
         )}
 
