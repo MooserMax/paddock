@@ -1969,7 +1969,10 @@ export async function getDuelPreview(petIdA: number, petIdB: number): Promise<Du
 }
 
 // ---- Duel: global stats + eligibility radar (read-only, from indexed data) -----------------
-export interface DuelGlobalStats { duelsResolved: number; duelbornMinted: number; challengeFeesWei: string; listingsCreated: number }
+export interface DuelGlobalStats {
+  duelsResolved: number; duelbornMinted: number; challengeFeesWei: string; listingsCreated: number;
+  parentsBurned?: number; gen2Pct?: number; gen2Plus?: number; openListings?: number;
+}
 
 export async function getDuelGlobalStats(): Promise<DuelGlobalStats | null> {
   const { data } = await db().from("sync_state").select("value").eq("key", "duel_stats_v1").maybeSingle();

@@ -139,10 +139,11 @@ export async function fetchDuelConfig(): Promise<DuelConfig | null> {
   }
 }
 
-// status: undefined | "preparing" | "completed". Empty now (no duels yet); renders gracefully.
-export async function fetchDuelListings(opts: { status?: "preparing" | "completed"; cursor?: string; limit?: number } = {}): Promise<DuelListingsPage> {
+// NOTE: the API's ?status= param is a no-op (it returns the same newest page regardless), so we
+// must partition by phaseName ourselves: RESOLVED = completed, OPEN/READY = preparing (CANCELLED
+// is neither). Verified live. cursor pagination DOES work (pageInfo.nextCursor).
+export async function fetchDuelListings(opts: { cursor?: string; limit?: number } = {}): Promise<DuelListingsPage> {
   const params = new URLSearchParams();
-  if (opts.status) params.set("status", opts.status);
   if (opts.cursor) params.set("cursor", opts.cursor);
   params.set("limit", String(Math.min(20, Math.max(1, opts.limit ?? 20))));
   try {
@@ -153,4 +154,28 @@ export async function fetchDuelListings(opts: { status?: "preparing" | "complete
   } catch {
     return { listings: [], hasMore: false, nextCursor: null };
   }
+}
+
+export interface DuelFeed { preparing: DuelListing[]; completed: DuelListing[] }
+
+// Gather up to `pages` pages (newest first), dedup by listingId, and partition by on-chain phase:
+// completed = RESOLVED (has a Duelborn); preparing = OPEN or READY (unresolved). Server-side.
+export async function fetchDuelFeed(pages = 3): Promise<DuelFeed> {
+  const byId = new Map<number, DuelListing>();
+  let cursor: string | undefined;
+  for (let i = 0; i < pages; i++) {
+    const page = await fetchDuelListings({ cursor, limit: 20 });
+    for (const l of page.listings) {
+      const idRaw = (l as { listingId?: number }).listingId;
+      if (typeof idRaw === "number" && !byId.has(idRaw)) byId.set(idRaw, l);
+    }
+    if (!page.hasMore || !page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  const all = [...byId.values()].sort((a, b) => Number((b as { listingId?: number }).listingId ?? 0) - Number((a as { listingId?: number }).listingId ?? 0));
+  const phase = (l: DuelListing) => String((l as { phaseName?: string }).phaseName ?? "").toUpperCase();
+  return {
+    completed: all.filter((l) => phase(l) === "RESOLVED"),
+    preparing: all.filter((l) => phase(l) === "OPEN" || phase(l) === "READY"),
+  };
 }

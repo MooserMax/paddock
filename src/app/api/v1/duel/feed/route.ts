@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { ok, guard, preflight } from "@/lib/api/http";
 import { rateLimit } from "@/lib/api/rateLimit";
-import { fetchDuelListings } from "@/lib/duel";
+import { fetchDuelFeed } from "@/lib/duel";
 
 export const dynamic = "force-dynamic";
 
@@ -16,12 +16,11 @@ export async function GET(req: NextRequest) {
   const limited = rateLimit(req);
   if (limited) return limited;
   return guard(async () => {
-    const [preparing, completed] = await Promise.all([
-      fetchDuelListings({ status: "preparing", limit: 20 }),
-      fetchDuelListings({ status: "completed", limit: 20 }),
-    ]);
+    // The API's status= param is a no-op; partition by on-chain phase ourselves (RESOLVED =
+    // completed, OPEN/READY = preparing), deduplicated across pages.
+    const feed = await fetchDuelFeed(3);
     return ok(
-      { available: true, preparing: preparing.listings, completed: completed.listings },
+      { available: true, preparing: feed.preparing, completed: feed.completed },
       { sMaxAge: 30, staleWhileRevalidate: 120 }
     );
   });

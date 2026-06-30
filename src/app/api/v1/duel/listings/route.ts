@@ -16,13 +16,10 @@ export async function GET(req: NextRequest) {
   const limited = rateLimit(req);
   if (limited) return limited;
 
-  const sp = req.nextUrl.searchParams;
-  const statusRaw = sp.get("status");
-  const status = statusRaw === "preparing" || statusRaw === "completed" ? statusRaw : undefined;
-  const cursor = sp.get("cursor") ?? undefined;
+  const cursor = req.nextUrl.searchParams.get("cursor") ?? undefined;
 
   return guard(async () => {
-    const page = await fetchDuelListings({ status, cursor });
-    return ok({ available: true, status: status ?? "all", ...page }, { sMaxAge: 30, staleWhileRevalidate: 120 });
+    const page = await fetchDuelListings({ cursor });
+    return ok({ available: true, ...page }, { sMaxAge: 30, staleWhileRevalidate: 120 });
   });
 }

@@ -39,6 +39,10 @@ export interface DuelStatsSnapshot {
   duelsResolved: number; duelbornMinted: number; listingsCreated: number; duelsEngaged: number; restores: number;
   challengeFeesWei: string; // actually paid (DuelEngaged)
   askingFeesWei: string;    // sum of listing asking prices (not revenue)
+  parentsBurned: number;    // distinct Giglings permanently destroyed (the Fallen of each duel)
+  gen2Plus: number;         // Duelborn of generation >= 2
+  gen2Pct: number;          // share of Duelborn that are gen >= 2 (0..100)
+  openListings: number;     // listings created minus engaged (awaiting a challenger)
   lineage: DuelLineageEntry[];
   duelsLeftByPet: Record<string, number>;
   lastIndexedBlock: number; generatedAt: string;
@@ -97,10 +101,18 @@ export async function indexDuels(): Promise<DuelStatsSnapshot> {
   for (const [petId, used] of duelsConsumed) duelsLeftByPet[petId] = fallenPets.has(petId) ? 0 : Math.max(0, MAX_DUELS - used);
   for (const petId of fallenPets) duelsLeftByPet[petId] = 0;
 
+  // Breeder-facing derived stats. parentsBurned = distinct Fallen (each duel destroys exactly one
+  // parent). gen2Pct = share of Duelborn at gen >= 2 (every duel so far has produced gen 2).
+  const gen2Plus = lineage.filter((e) => e.generation >= 2).length;
+  const gen2Pct = lineage.length > 0 ? Math.round((gen2Plus / lineage.length) * 100) : 0;
+
   const snapshot: DuelStatsSnapshot = {
     duelsResolved, duelbornMinted, listingsCreated, duelsEngaged, restores,
     challengeFeesWei: feesWei.toString(),
     askingFeesWei: askingWei.toString(),
+    parentsBurned: fallenPets.size,
+    gen2Plus, gen2Pct,
+    openListings: Math.max(0, listingsCreated - duelsEngaged),
     lineage: lineage.sort((a, b) => b.offspringPetId - a.offspringPetId).slice(0, 200),
     duelsLeftByPet,
     lastIndexedBlock: head, generatedAt: new Date().toISOString(),
