@@ -37,7 +37,8 @@ export interface DuelLineageEntry { offspringPetId: number; parents: [number, nu
 
 export interface DuelStatsSnapshot {
   duelsResolved: number; duelbornMinted: number; listingsCreated: number; duelsEngaged: number; restores: number;
-  challengeFeesWei: string;
+  challengeFeesWei: string; // actually paid (DuelEngaged)
+  askingFeesWei: string;    // sum of listing asking prices (not revenue)
   lineage: DuelLineageEntry[];
   duelsLeftByPet: Record<string, number>;
   lastIndexedBlock: number; generatedAt: string;
@@ -63,9 +64,14 @@ export async function indexDuels(): Promise<DuelStatsSnapshot> {
     if (l.topics[0] === TOPIC_FALLEN) { const f = decodeFallen(l); fallenByListing.set(f.listingId, f.fallenPetId); fallenPets.add(Number(f.fallenPetId)); }
   }
 
+  // Challenge fees PAID = sum of DuelEngaged.priceWei only (what a challenger actually paid on
+  // engaging). ListingCreated.priceWei is the asking price of a listing that may never fill, so it
+  // is NOT revenue and is tracked separately as askingWei. (Verified: the paid total matches the
+  // 0x8728 payment events on-chain.)
+  let askingWei = 0n;
   for (const l of logs) {
     switch (l.topics[0]) {
-      case TOPIC_LISTING_CREATED: { const e = decodeListingCreated(l); listingsCreated++; feesWei += BigInt(e.priceWei); break; }
+      case TOPIC_LISTING_CREATED: { const e = decodeListingCreated(l); listingsCreated++; askingWei += BigInt(e.priceWei); break; }
       case TOPIC_DUEL_ENGAGED: { const e = decodeDuelEngaged(l); duelsEngaged++; feesWei += BigInt(e.priceWei); break; }
       case TOPIC_DUEL_RESTORED: { restores++; break; }
       case TOPIC_OFFSPRING_MINTED: {
@@ -94,6 +100,7 @@ export async function indexDuels(): Promise<DuelStatsSnapshot> {
   const snapshot: DuelStatsSnapshot = {
     duelsResolved, duelbornMinted, listingsCreated, duelsEngaged, restores,
     challengeFeesWei: feesWei.toString(),
+    askingFeesWei: askingWei.toString(),
     lineage: lineage.sort((a, b) => b.offspringPetId - a.offspringPetId).slice(0, 200),
     duelsLeftByPet,
     lastIndexedBlock: head, generatedAt: new Date().toISOString(),
