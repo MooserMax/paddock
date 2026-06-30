@@ -34,12 +34,13 @@ export interface GlobalRaceGas {
   txCount: number;
 }
 
-// GigaJuice revenue paid by players, MEASURED on-chain (inflows to the Juice contract). Not an
-// estimate. Three rolling windows.
+// GigaJuice revenue paid by players, MEASURED on-chain. 7d/30d are rolling (shown at the live
+// rate); lifetime USD is historical-price-accurate (each buy valued at its own day's ETH price).
 export interface GlobalJuice {
-  w24hWei: string;
   w7dWei: string;
-  allTimeWei: string;
+  w30dWei: string;
+  lifetimeWei: string;
+  lifetimeUsd: number;
 }
 
 type Stat = { value: string; label: string; sub?: string; accent?: string };
@@ -91,17 +92,22 @@ export default function GlobalStats({ site, giga, itemStats, raceGas, juice, eth
     }
   }
   if (juice) {
-    // GigaJuice revenue, MEASURED on-chain via the fixed tier-price table (not an estimate).
-    // Bottom row: 24h, 7d, all-time. USD headline (gold) at the live rate; ETH + the measured
-    // label sit in the sub. ETH fallback if no live rate.
-    const juiceTile = (wei: string, label: string): Stat => {
+    // Bottom row: 7 Day / 30 Day / Lifetime Juice sales. 7d/30d roll at the LIVE rate (recent, so
+    // current price is fine); Lifetime USD is HISTORICAL (each buy at its own day's ETH price), so
+    // it is shown as-stored, never multiplied by today's rate. USD headline (gold), ETH in the sub.
+    const windowTile = (wei: string, label: string): Stat => {
       const eth = Number(wei) / 1e18;
       const usd = ethUsd && ethUsd > 0 ? formatUsd(eth * ethUsd) : null;
       return { value: usd ?? ethStr(wei, 3), label, sub: `${ethStr(wei, 3)} · players buying Juice, on-chain`, accent: "var(--gold)" };
     };
-    stats.push(juiceTile(juice.w24hWei, "24h Juice sales"));
-    stats.push(juiceTile(juice.w7dWei, "7d Juice sales"));
-    stats.push(juiceTile(juice.allTimeWei, "All-time Juice sales"));
+    stats.push(windowTile(juice.w7dWei, "7 Day Juice sales"));
+    stats.push(windowTile(juice.w30dWei, "30 Day Juice sales"));
+    stats.push({
+      value: formatUsd(juice.lifetimeUsd),
+      label: "Lifetime Juice sales",
+      sub: `${ethStr(juice.lifetimeWei, 2)} · USD at time of each sale`,
+      accent: "var(--gold)",
+    });
   }
 
   return (

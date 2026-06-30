@@ -1916,11 +1916,13 @@ export async function getPaidVolume24h(): Promise<PaidVolume24hHome | null> {
 
 // GigaJuice revenue (measured on-chain inflows). Gated on reconciliation (summed inflow ==
 // balance + outflow AND backfill complete); null/hidden until reconciled, never a partial number.
-export interface JuiceRevenueHome { allTimeWei: string; w7dWei: string; w24hWei: string; allTimeCount: number }
+// Windows: 7d / 30d (rolling, live rail) shown at the live rate; lifetimeUsd is HISTORICAL
+// (each buy at its own day's ETH price), so it is stored, not multiplied by the live rate.
+export interface JuiceRevenueHome { w7dWei: string; w30dWei: string; lifetimeWei: string; lifetimeUsd: number }
 
 export async function getJuiceRevenue(): Promise<JuiceRevenueHome | null> {
   const { data } = await db().from("sync_state").select("value").eq("key", "juice_revenue_v1").maybeSingle();
-  const v = data?.value as { allTimeWei?: string; w7dWei?: string; w24hWei?: string; allTimeCount?: number; reconciled?: boolean } | undefined;
+  const v = data?.value as { allTimeWei?: string; w7dWei?: string; w30dWei?: string; lifetimeUsd?: number; reconciled?: boolean } | undefined;
   if (!v || !v.reconciled) return null;
-  return { allTimeWei: v.allTimeWei ?? "0", w7dWei: v.w7dWei ?? "0", w24hWei: v.w24hWei ?? "0", allTimeCount: v.allTimeCount ?? 0 };
+  return { w7dWei: v.w7dWei ?? "0", w30dWei: v.w30dWei ?? "0", lifetimeWei: v.allTimeWei ?? "0", lifetimeUsd: v.lifetimeUsd ?? 0 };
 }

@@ -1,4 +1,5 @@
 import { setSyncState } from "../syncState";
+import { getDailyEthUsd, priceOnDay } from "../ethPriceHistory";
 
 // GigaJuice revenue, measured authoritatively. A Juice buy is a successful tx TO a Juice contract
 // whose input selector is 0x52ce66cc; the tier is calldata word 1 (1-4) and the price is a FIXED
@@ -26,9 +27,13 @@ export const JUICE_SNAPSHOT_KEY = "juice_revenue_v1";
 
 export interface JuiceSnapshot {
   allTimeWei: string; allTimeEth: string; allTimeCount: number; allTimeTiers: Record<number, number>;
+  // lifetime USD valued at EACH buy's own-day ETH price (not today's). impliedAvgEthUsd =
+  // lifetimeUsd / lifetimeEth (the volume-weighted ETH price the revenue was earned at).
+  lifetimeUsd: number; impliedAvgEthUsd: number;
+  perRailUsd: Record<string, number>; perMonthUsd: Record<string, number>; perMonthEth: Record<string, number>;
   oldRailEth: string; oldRailCount: number; liveRailEth: string; liveRailCount: number;
   w7dWei: string; w7dEth: string; w7dCount: number;
-  w24hWei: string; w24hEth: string; w24hCount: number;
+  w30dWei: string; w30dEth: string; w30dCount: number;
   reconciled: boolean; generatedAt: string;
 }
 
@@ -76,36 +81,58 @@ async function enumerate(contract: string): Promise<Buy[]> {
   return buys;
 }
 
+const PRICE_ETH: Record<number, number> = { 1: 0.004, 2: 0.010, 3: 0.023, 4: 0.038 };
+const dayOf = (tsSec: number) => new Date(tsSec * 1000).toISOString().slice(0, 10);
+const monthOf = (tsSec: number) => new Date(tsSec * 1000).toISOString().slice(0, 7);
+
 export async function computeJuiceRevenue(): Promise<JuiceSnapshot> {
   // Enumerate each contract; tag buys by rail for the breakdown. Different contracts/txs, so the
   // combined total never double-counts (and tx_hash dedup is per-contract).
   const perContract = await Promise.all(ALL_CONTRACTS.map(async (c) => ({ c, buys: await enumerate(c) })));
+  const days = await getDailyEthUsd();
+  const sortedKeys = Object.keys(days).sort();
   const now = Math.floor(Date.now() / 1000);
 
-  let allWei = 0n, w7 = 0n, w24 = 0n, n7 = 0, n24 = 0, allN = 0;
+  let allWei = 0n, w7 = 0n, w30 = 0n, n7 = 0, n30 = 0, allN = 0;
   let oldWei = 0n, oldN = 0, liveWei = 0n, liveN = 0;
+  let lifetimeUsd = 0;
   const tiers: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  const perRailUsd: Record<string, number> = {};
+  const perMonthUsd: Record<string, number> = {}, perMonthEth: Record<string, number> = {};
   for (const { c, buys } of perContract) {
     const isLive = c === LIVE_CONTRACT;
+    const railKey = isLive ? "live" : c;
     for (const b of buys) {
       const p = PRICE_WEI[b.tier];
       allWei += p; allN++; tiers[b.tier]++;
       if (isLive) { liveWei += p; liveN++; } else { oldWei += p; oldN++; }
+      // historical USD: value the buy at its OWN day's ETH price
+      const px = priceOnDay(days, sortedKeys, dayOf(b.ts));
+      const usd = px != null ? PRICE_ETH[b.tier] * px : 0;
+      lifetimeUsd += usd;
+      perRailUsd[railKey] = (perRailUsd[railKey] ?? 0) + usd;
+      const m = monthOf(b.ts);
+      perMonthUsd[m] = (perMonthUsd[m] ?? 0) + usd;
+      perMonthEth[m] = (perMonthEth[m] ?? 0) + PRICE_ETH[b.tier];
+      // rolling windows (live rail only contributes; old rails are far in the past)
       if (b.ts >= now - 7 * 86_400) { w7 += p; n7++; }
-      if (b.ts >= now - 86_400) { w24 += p; n24++; }
+      if (b.ts >= now - 30 * 86_400) { w30 += p; n30++; }
     }
   }
 
-  // Gate: render only once the enumeration is complete, which REQUIRES the live rail (old rail is
-  // ~41,600 alone, so total > 42,000 proves the live rail was included). A partial scan stays
-  // below the floor and the row stays hidden.
-  const reconciled = allN >= 42_000 && liveN > 0;
+  const lifetimeEth = Number(ethStr(allWei));
+  // Gate: render only once the enumeration is complete and the historical USD computed, which
+  // REQUIRES the live rail (old rail is ~41,600 alone, so total > 42,000 proves the live rail was
+  // included) and the price series resolved (lifetimeUsd well above the today's-price floor).
+  const reconciled = allN >= 42_000 && liveN > 0 && lifetimeUsd > 0 && lifetimeEth >= 450;
 
   const snapshot: JuiceSnapshot = {
     allTimeWei: allWei.toString(), allTimeEth: ethStr(allWei), allTimeCount: allN, allTimeTiers: tiers,
+    lifetimeUsd: Math.round(lifetimeUsd), impliedAvgEthUsd: lifetimeEth > 0 ? Math.round(lifetimeUsd / lifetimeEth) : 0,
+    perRailUsd, perMonthUsd, perMonthEth,
     oldRailEth: ethStr(oldWei), oldRailCount: oldN, liveRailEth: ethStr(liveWei), liveRailCount: liveN,
     w7dWei: w7.toString(), w7dEth: ethStr(w7), w7dCount: n7,
-    w24hWei: w24.toString(), w24hEth: ethStr(w24), w24hCount: n24,
+    w30dWei: w30.toString(), w30dEth: ethStr(w30), w30dCount: n30,
     reconciled, generatedAt: new Date().toISOString(),
   };
   await setSyncState(JUICE_SNAPSHOT_KEY, snapshot);
