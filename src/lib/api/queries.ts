@@ -1929,6 +1929,12 @@ export async function getJuiceRevenue(): Promise<JuiceRevenueHome | null> {
 
 // ---- Duel: parent lookup + deterministic preview (read-only) -------------------------------
 import { breedingPreview, RARITY_TIERS, type ParentInput, type BreedingPreview, type Rarity } from "../duelRules";
+import { predictRarity, rarityValue, type DuelModel, type RarityPrediction } from "../ingest/duelModel";
+
+async function loadDuelModel(): Promise<DuelModel | null> {
+  const { data } = await db().from("sync_state").select("value").eq("key", "duel_model_v1").maybeSingle();
+  return (data?.value as DuelModel | undefined) ?? null;
+}
 
 // Load a parent's duel-relevant fields from indexed pet data. Stats use the revealed-range
 // midpoint per stat. duelsLeft comes from the duel-index snapshot (null if the pet has not dueled).
@@ -1955,7 +1961,23 @@ export async function getDuelParent(petId: number, duelsLeftByPet?: Record<strin
   };
 }
 
-export interface DuelPreviewResult { a: ParentInput; b: ParentInput; preview: BreedingPreview }
+// Modeled (empirical) outcomes, each carrying its sample size N and basis. Separate from the
+// deterministic facts in BreedingPreview.
+export interface ModeledOutcome {
+  modelN: number;
+  rarity: RarityPrediction;
+  faction: { inheritRatePct: number; n: number } | null;
+  fall: { rule: string; n: number };
+  valuation: {
+    burnedEth: number | null; burnedSource: string;
+    gainedEth: number | null; gainedN: number;
+    netEth: number | null; note: string;
+  };
+  caveat: string;
+}
+export interface DuelPreviewResult { a: ParentInput; b: ParentInput; preview: BreedingPreview; modeled: ModeledOutcome | null }
+
+const rarityIdx = (r: Rarity | null) => (r ? RARITY_TIERS.indexOf(r) : -1);
 
 export async function getDuelPreview(petIdA: number, petIdB: number): Promise<DuelPreviewResult | null> {
   const { data: snap } = await db().from("sync_state").select("value").eq("key", "duel_stats_v1").maybeSingle();
@@ -1963,9 +1985,86 @@ export async function getDuelPreview(petIdA: number, petIdB: number): Promise<Du
   const dl = blob?.duelsLeftByPet ?? {};
   const genByPet: Record<string, number> = {};
   for (const e of blob?.lineage ?? []) genByPet[String(e.offspringPetId)] = e.generation;
-  const [a, b] = await Promise.all([getDuelParent(petIdA, dl, genByPet), getDuelParent(petIdB, dl, genByPet)]);
+  const [a, b, model] = await Promise.all([getDuelParent(petIdA, dl, genByPet), getDuelParent(petIdB, dl, genByPet), loadDuelModel()]);
   if (!a || !b) return null;
-  return { a, b, preview: breedingPreview(a, b) };
+
+  const preview = breedingPreview(a, b);
+  let modeled: ModeledOutcome | null = null;
+  const ra = rarityIdx(a.rarity), rb = rarityIdx(b.rarity);
+  if (model && ra >= 0 && rb >= 0) {
+    const rarity = predictRarity(model, ra, rb);
+    // Valuation: value-burned = the lower-rarity-tier value (a proven parent is destroyed; we
+    // estimate by the rarity tier since the specific destroyed parent is the breeder's choice),
+    // value-gained = the predicted Duelborn rarity's typical value. Modeled, not guaranteed.
+    const burnLow = rarityValue(model, Math.min(ra, rb));
+    const gain = rarityValue(model, rarity.mostLikely);
+    const burnedEth = burnLow.medianEth;
+    const gainedEth = gain.medianEth;
+    const netEth = burnedEth != null && gainedEth != null ? Math.round((gainedEth - burnedEth) * 10000) / 10000 : null;
+    modeled = {
+      modelN: model.n,
+      rarity,
+      faction: { inheritRatePct: Math.round(model.faction.inheritRate * 100), n: model.faction.n },
+      fall: { rule: model.fall.rule, n: model.fall.n },
+      valuation: {
+        burnedEth, burnedSource: `typical ${RARITY_TIERS[Math.min(ra, rb)] ?? "tier"} sale (N=${burnLow.n})`,
+        gainedEth, gainedN: gain.n,
+        netEth,
+        note: "Modeled from rarity-tier sale medians; the Duelborn is unrevealed, so this is a rarity-floor estimate, not a guarantee.",
+      },
+      caveat: `Modeled from ${model.n} real duels. Probabilities carry their sample size; thin pairings fall back to the documented rule.`,
+    };
+  }
+  return { a, b, preview, modeled };
+}
+
+// ---- Best-pairings suggester (the killer feature: rank a stable's viable pairings) ----------
+export interface PairingSuggestion {
+  male: { petId: number; name: string | null; rarity: string | null };
+  female: { petId: number; name: string | null; rarity: string | null };
+  predictedRarity: { name: string; pct: number; n: number; basis: string };
+  netEth: number | null;
+  generation: number | null;
+  score: number; // ranking score (expected net value, falling back to predicted rarity index)
+}
+
+export interface BestPairings { address: string; goal: string; suggestions: PairingSuggestion[]; modelN: number; note: string }
+
+// Rank viable male+female pairings in a stable by predicted outcome / expected net value. Goal:
+// "value" (default, rank by expected net ETH), "rarity" (rank by most-likely offspring rarity).
+// Read from indexed data + the fitted model; no per-pet live calls.
+export async function getBestPairings(address: string, goal: "value" | "rarity" = "value"): Promise<BestPairings> {
+  const radar = await getDuelRadar(address);
+  const model = await loadDuelModel();
+  const males = radar.eligibleMales, females = radar.eligibleFemales;
+  const idxOf = (name: string | null) => (name ? RARITY_TIERS.indexOf(name as Rarity) : -1);
+
+  const suggestions: PairingSuggestion[] = [];
+  for (const m of males) {
+    for (const f of females) {
+      const ra = idxOf(m.rarity), rb = idxOf(f.rarity);
+      if (ra < 0 || rb < 0) continue;
+      const pred = predictRarity(model, ra, rb);
+      const gain = rarityValue(model, pred.mostLikely);
+      const burn = rarityValue(model, Math.min(ra, rb));
+      const netEth = gain.medianEth != null && burn.medianEth != null ? Math.round((gain.medianEth - burn.medianEth) * 10000) / 10000 : null;
+      const top = pred.distribution[0];
+      const score = goal === "rarity" ? pred.mostLikely * 100 + (top?.pct ?? 0) : (netEth ?? -999);
+      suggestions.push({
+        male: { petId: m.petId, name: m.name, rarity: m.rarity },
+        female: { petId: f.petId, name: f.name, rarity: f.rarity },
+        predictedRarity: { name: top?.name ?? "?", pct: top?.pct ?? 0, n: pred.n, basis: pred.basis },
+        netEth, generation: null, score,
+      });
+    }
+  }
+  suggestions.sort((a, b) => b.score - a.score);
+  return {
+    address: address.toLowerCase(), goal,
+    suggestions: suggestions.slice(0, 12),
+    modelN: model?.n ?? 0,
+    note: model ? `Ranked from ${model.n} real duels. Net value is a rarity-floor estimate, not a guarantee.` : "Model not fit yet.",
+  };
 }
 
 // ---- Duel: global stats + eligibility radar (read-only, from indexed data) -----------------

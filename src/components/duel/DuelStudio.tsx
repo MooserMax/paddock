@@ -17,7 +17,23 @@ interface Preview {
   glue: { a: { deglueYield: number | null; reglueCost: number | null }; b: { deglueYield: number | null; reglueCost: number | null } };
 }
 interface Parent { petId: number; sex: string | null; rarity: string | null; generation: number | null; factionName: string | null; racesRun: number | null; duelsLeft: number | null }
-interface PreviewResult { a: Parent; b: Parent; preview: Preview }
+interface RarityDist { rarity: number; name: string; pct: number }
+interface Modeled {
+  modelN: number;
+  rarity: { distribution: RarityDist[]; mostLikely: number; n: number; basis: string };
+  faction: { inheritRatePct: number; n: number } | null;
+  fall: { rule: string; n: number };
+  valuation: { burnedEth: number | null; burnedSource: string; gainedEth: number | null; gainedN: number; netEth: number | null; note: string };
+  caveat: string;
+}
+interface PreviewResult { a: Parent; b: Parent; preview: Preview; modeled: Modeled | null }
+interface Suggestion {
+  male: { petId: number; name: string | null; rarity: string | null };
+  female: { petId: number; name: string | null; rarity: string | null };
+  predictedRarity: { name: string; pct: number; n: number; basis: string };
+  netEth: number | null;
+}
+interface BestPairings { suggestions: Suggestion[]; modelN: number; note: string }
 
 const GIGA_DUEL_URL = "https://gigaverse.io/duel";
 
@@ -62,13 +78,16 @@ export default function DuelStudio({ minRaces }: { minRaces: number }) {
   const [loadingP, setLoadingP] = useState(false);
   const [errP, setErrP] = useState<string | null>(null);
 
+  const [best, setBest] = useState<BestPairings | null>(null);
+
   async function scan(a: string) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(a)) { setErrR("Paste a 0x wallet address."); return; }
-    setLoadingR(true); setErrR(null); setMale(null); setFemale(null); setPreview(null);
+    setLoadingR(true); setErrR(null); setMale(null); setFemale(null); setPreview(null); setBest(null);
     try {
       const r = await fetch(`/api/v1/duel/radar?address=${a}`);
       if (!r.ok) throw new Error((await r.json())?.error?.message ?? "Lookup failed.");
       setRadar(await r.json());
+      fetch(`/api/v1/duel/best-pairings?address=${a}`).then((x) => x.ok ? x.json() : null).then((b) => setBest(b)).catch(() => setBest(null));
     } catch (e) { setErrR(e instanceof Error ? e.message : "Lookup failed."); setRadar(null); }
     finally { setLoadingR(false); }
   }
@@ -148,6 +167,26 @@ export default function DuelStudio({ minRaces }: { minRaces: number }) {
         )}
       </div>
 
+      {/* Best pairings suggester */}
+      {best && best.suggestions.length > 0 && (
+        <div>
+          <h2 className="type-section mb-1 text-ink">Best pairings for this stable</h2>
+          <p className="type-micro mb-3 normal-case text-ink-faint">Ranked by expected net value. {best.note}</p>
+          <div className="overflow-hidden rounded-lg border hairline">
+            {best.suggestions.slice(0, 8).map((s, i) => (
+              <button key={i} type="button"
+                onClick={() => { setMale(s.male.petId); setFemale(s.female.petId); runPreview(s.male.petId, s.female.petId); }}
+                className="transition-paddock flex w-full items-center gap-3 border-b hairline px-4 py-2.5 text-left last:border-0 hover:bg-paper-sunken">
+                <span className="type-data w-6 tabular-nums text-ink-faint">{i + 1}</span>
+                <span className="type-data flex-1 truncate text-ink">#{s.male.petId} {s.male.rarity ?? ""} <span className="text-ink-faint">x</span> #{s.female.petId} {s.female.rarity ?? ""}</span>
+                <span className="type-data text-ink-soft">{s.predictedRarity.name} {s.predictedRarity.pct}%</span>
+                {s.netEth != null && <span className="type-data w-24 text-right tabular-nums" style={{ color: s.netEth >= 0 ? "var(--green)" : "var(--brick)" }}>{s.netEth >= 0 ? "+" : ""}{s.netEth} ETH</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* B. BREEDING PREVIEW centerpiece */}
       <div className="rounded-2xl border hairline p-5 md:p-6" style={{ background: "var(--paper-raised)" }}>
         <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
@@ -211,17 +250,49 @@ export default function DuelStudio({ minRaces }: { minRaces: number }) {
               <p className="type-data mt-1 text-ink-soft">Faction: {p.odds.faction.note}</p>
             </Block>
 
-            {/* IS IT WORTH IT */}
+            {/* MODELED ODDS (empirical, with N) */}
+            {preview.modeled && (
+              <Block label={`Modeled odds, from ${preview.modeled.modelN} real duels`} tone="var(--cyan)">
+                <p className="type-data text-ink">
+                  Offspring rarity:{" "}
+                  {preview.modeled.rarity.distribution.slice(0, 4).map((d, i) => (
+                    <span key={i}><span style={{ color: "var(--gold)" }}>{d.name} {d.pct}%</span>{i < Math.min(3, preview.modeled!.rarity.distribution.length - 1) ? " · " : ""}</span>
+                  ))}
+                </p>
+                <p className="type-micro mt-0.5 normal-case text-ink-faint">
+                  {preview.modeled.rarity.basis === "data" ? `fit from ${preview.modeled.rarity.n} duels with this parent-rarity pair` : `this pairing is thin in the data (N=${preview.modeled.rarity.n}); using the documented rule (centered on the lower parent, capped climb, small slip)`}
+                </p>
+                {preview.modeled.faction && (
+                  <p className="type-data mt-2 text-ink">Faction: <span className="text-ink-soft">offspring takes a parent's faction {preview.modeled.faction.inheritRatePct}% of the time (N={preview.modeled.faction.n})</span></p>
+                )}
+                <p className="type-data mt-1 text-ink">Who falls: <span className="text-ink-soft">{preview.modeled.fall.rule} (N={preview.modeled.fall.n})</span></p>
+              </Block>
+            )}
+
+            {/* IS IT WORTH IT (valuation) */}
             <Block label="Is it worth it" tone="var(--gold)">
-              <p className="type-data text-ink-soft">
-                You permanently burn one proven racer (glue yield {doomedParent ? (doomedParent.petId === preview.a.petId ? p.glue.a.deglueYield : p.glue.b.deglueYield) : `${p.glue.a.deglueYield}/${p.glue.b.deglueYield}`}) to mint a gen {p.certain.generation ?? "?"} Duelborn with a flat +{p.certain.generationBonus ?? "?"} race boost.
-              </p>
-              <p className="type-micro mt-1 normal-case text-ink-faint">Value-burned vs value-gained: valuation model in progress.</p>
+              {preview.modeled?.valuation.netEth != null ? (
+                <>
+                  <p className="type-data text-ink">
+                    Expected net value: <span style={{ color: preview.modeled.valuation.netEth >= 0 ? "var(--green)" : "var(--brick)" }}>{preview.modeled.valuation.netEth >= 0 ? "+" : ""}{preview.modeled.valuation.netEth} ETH</span>
+                  </p>
+                  <p className="type-micro mt-1 normal-case text-ink-faint">
+                    burn ~{preview.modeled.valuation.burnedEth} ETH ({preview.modeled.valuation.burnedSource}) to mint a Duelborn worth ~{preview.modeled.valuation.gainedEth} ETH (typical sale of the predicted rarity, N={preview.modeled.valuation.gainedN}) + a gen {p.certain.generation ?? "?"} +{p.certain.generationBonus ?? "?"} race boost. {preview.modeled.valuation.note}
+                  </p>
+                </>
+              ) : (
+                <p className="type-data text-ink-soft">
+                  You permanently burn one proven racer (glue yield {doomedParent ? (doomedParent.petId === preview.a.petId ? p.glue.a.deglueYield : p.glue.b.deglueYield) : `${p.glue.a.deglueYield}/${p.glue.b.deglueYield}`}) to mint a gen {p.certain.generation ?? "?"} Duelborn. Not enough rarity-tier sales to value it yet; valuation pending.
+                </p>
+              )}
             </Block>
 
             {/* Pending */}
-            <Block label="Coming with the odds model" tone="var(--ink-faint)">
-              <ul className="space-y-1">{p.pending.map((x, i) => <li key={i} className="type-data text-ink-faint">{x}</li>)}</ul>
+            <Block label="Still pending the model" tone="var(--ink-faint)">
+              <ul className="space-y-1">
+                <li className="type-data text-ink-faint">Stat 95% ranges (offspring stats are unrevealed at mint, so the spread is not yet fittable; expected = parent midpoint)</li>
+                <li className="type-data text-ink-faint">Trait star-tiers (offspring traits are unrevealed at mint; documented rule only)</li>
+              </ul>
             </Block>
 
             {/* CTA: link only, never sign */}
