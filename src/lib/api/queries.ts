@@ -1941,9 +1941,10 @@ export async function getDuelParent(petId: number, duelsLeftByPet?: Record<strin
   // Generation: a Duelborn's generation is indexed in the lineage; every other Gigling is genesis
   // (gen 1). Both are verifiable, never guessed.
   const generation = genByPet && genByPet[String(petId)] != null ? genByPet[String(petId)] : 1;
+  const sexStr = typeof p.gender === "string" ? p.gender.toLowerCase() : "";
   return {
     petId,
-    sex: (p.gender as "male" | "female" | null) ?? null,
+    sex: sexStr === "male" || sexStr === "female" ? (sexStr as "male" | "female") : null,
     rarity: rarityIdx != null && rarityIdx >= 0 && rarityIdx < RARITY_TIERS.length ? (RARITY_TIERS[rarityIdx] as Rarity) : null,
     generation,
     factionId: (p.faction as number | null) ?? null,
@@ -2010,9 +2011,13 @@ export async function getDuelRadar(address: string): Promise<DuelRadar> {
   const duelsLeft = new Map<number, number>(Object.entries(dlBlob).map(([k, v]) => [Number(k), v]));
 
   const MIN = 40, NEAR = 10;
+  const normSex = (g: unknown): "male" | "female" | null => {
+    const s = typeof g === "string" ? g.toLowerCase() : "";
+    return s === "male" || s === "female" ? s : null;
+  };
   const rows: DuelRadarPet[] = (pets ?? []).map((p) => {
     const races = (p.races_run as number) ?? 0;
-    const sex = (p.gender as "male" | "female" | null) ?? null;
+    const sex = normSex(p.gender);
     const dl = duelsLeft.has(p.id as number) ? duelsLeft.get(p.id as number)! : null;
     let status: DuelEligStatus;
     if (dl != null && dl <= 0) status = "ineligible";
