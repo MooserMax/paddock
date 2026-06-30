@@ -7,7 +7,7 @@ import RarityBadge from "@/components/RarityBadge";
 import RecentWins from "@/components/home/RecentWins";
 import GlobalStats from "@/components/home/GlobalStats";
 import PaidRacingVolume from "@/components/home/PaidRacingVolume";
-import { getRecentWins, getItemSpendHomeStats, getRaceGasHomeStat, getPaidVolume24h, getJuiceRevenue, type ItemSpendHome, type RaceGasHome, type PaidVolume24hHome, type JuiceRevenueHome } from "@/lib/api/queries";
+import { getRecentWins, getItemSpendHomeStats, getRaceGasHomeStat, getPaidVolume24h, getJuiceRevenue, getDuelGlobalStats, type ItemSpendHome, type RaceGasHome, type PaidVolume24hHome, type JuiceRevenueHome, type DuelGlobalStats } from "@/lib/api/queries";
 import { fetchGigaStats, fetchEthUsd, type GigaStats } from "@/lib/telemetry";
 import { formatScore, formatPct } from "@/lib/format";
 
@@ -23,8 +23,9 @@ export default async function Home() {
   let ethUsd: number | null = null;
   let paidVol: PaidVolume24hHome | null = null;
   let juice: JuiceRevenueHome | null = null;
+  let duel: DuelGlobalStats | null = null;
   try {
-    [stats, board, recentWins, giga, itemStats, raceGas, ethUsd, paidVol, juice] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats(), getItemSpendHomeStats(), getRaceGasHomeStat(), fetchEthUsd(), getPaidVolume24h(), getJuiceRevenue()]);
+    [stats, board, recentWins, giga, itemStats, raceGas, ethUsd, paidVol, juice, duel] = await Promise.all([api.stats(), api.leaderboard("cq", 6), getRecentWins(12), fetchGigaStats(), getItemSpendHomeStats(), getRaceGasHomeStat(), fetchEthUsd(), getPaidVolume24h(), getJuiceRevenue(), getDuelGlobalStats()]);
   } catch {
     // The hero still renders without live numbers; never a blank crash.
   }
@@ -52,7 +53,7 @@ export default async function Home() {
       </section>
 
       {/* Global Stats showcase: the macro numbers, screenshottable, self-branding. */}
-      <GlobalStats site={stats} giga={giga} itemStats={itemStats} raceGas={raceGas} juice={juice} ethUsd={ethUsd} />
+      <GlobalStats site={stats} giga={giga} itemStats={itemStats} raceGas={raceGas} juice={juice} duel={duel} ethUsd={ethUsd} />
 
       {/* 24h paid racing volume: its own tile in the band above Recent Wins. */}
       <PaidRacingVolume data={paidVol} ethUsd={ethUsd} />

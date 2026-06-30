@@ -43,11 +43,18 @@ export interface GlobalJuice {
   lifetimeUsd: number;
 }
 
+// Duel (breeding) economics, measured on-chain from PetDuelingSystem.
+export interface GlobalDuel {
+  duelsResolved: number;
+  duelbornMinted: number;
+  challengeFeesWei: string;
+}
+
 type Stat = { value: string; label: string; sub?: string; accent?: string };
 
 const ethStr = (wei: string | number, dp: number) => formatEth(Number(wei) / 1e18, dp);
 
-export default function GlobalStats({ site, giga, itemStats, raceGas, juice, ethUsd }: { site: SiteStats | null; giga: GigaStats | null; itemStats?: GlobalItemStats | null; raceGas?: GlobalRaceGas | null; juice?: GlobalJuice | null; ethUsd?: number | null }) {
+export default function GlobalStats({ site, giga, itemStats, raceGas, juice, duel, ethUsd }: { site: SiteStats | null; giga: GigaStats | null; itemStats?: GlobalItemStats | null; raceGas?: GlobalRaceGas | null; juice?: GlobalJuice | null; duel?: GlobalDuel | null; ethUsd?: number | null }) {
   if (!site && !giga) return null;
 
   const stats: Stat[] = [];
@@ -108,6 +115,12 @@ export default function GlobalStats({ site, giga, itemStats, raceGas, juice, eth
       sub: `${ethStr(juice.lifetimeWei, 2)} · USD at time of each sale`,
       accent: "var(--gold)",
     });
+  }
+  if (duel && duel.duelsResolved > 0) {
+    // Duel (breeding) economics, measured on-chain. Challenge fees are currently 0 (free duels).
+    stats.push({ value: formatInt(duel.duelsResolved), label: "Duels resolved", sub: "breeding via combat" });
+    stats.push({ value: formatInt(duel.duelbornMinted), label: "Duelborn minted" });
+    stats.push({ value: ethStr(duel.challengeFeesWei, 3), label: "Challenge fees", sub: "paid by challengers, on-chain", accent: "var(--gold)" });
   }
 
   return (

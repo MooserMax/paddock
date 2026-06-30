@@ -12,6 +12,7 @@ import { runItemSpendCron } from "@/lib/ingest/itemSpend";
 import { runRaceGasCron } from "@/lib/ingest/raceGas";
 import { computePaidVolume24h } from "@/lib/ingest/paidVolume";
 import { computeJuiceRevenue } from "@/lib/ingest/juice";
+import { indexDuels } from "@/lib/ingest/duelIndex";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -274,6 +275,19 @@ export async function GET(req: NextRequest) {
       }
     } else {
       steps.juiceSkipped = "soft deadline";
+    }
+
+    // 3g. Duel index: scan PetDuelingSystem for global stats, lineage, and per-pet duels-left
+    //     (all into sync_state). Cheap (the contract is young); fault isolated; no request-time work.
+    if (timeLeft()) {
+      try {
+        const r = await indexDuels();
+        steps.duels = { resolved: r.duelsResolved, minted: r.duelbornMinted, listings: r.listingsCreated };
+      } catch (e) {
+        steps.duelsError = msg(e);
+      }
+    } else {
+      steps.duelsSkipped = "soft deadline";
     }
 
     // 4. Resolve Gigaverse usernames for a small slice of displayed owners, in

@@ -1926,3 +1926,111 @@ export async function getJuiceRevenue(): Promise<JuiceRevenueHome | null> {
   if (!v || !v.reconciled) return null;
   return { w7dWei: v.w7dWei ?? "0", w30dWei: v.w30dWei ?? "0", lifetimeWei: v.allTimeWei ?? "0", lifetimeUsd: v.lifetimeUsd ?? 0 };
 }
+
+// ---- Duel: parent lookup + deterministic preview (read-only) -------------------------------
+import { breedingPreview, RARITY_TIERS, type ParentInput, type BreedingPreview, type Rarity } from "../duelRules";
+
+// Load a parent's duel-relevant fields from indexed pet data. Stats use the revealed-range
+// midpoint per stat. duelsLeft comes from the duel-index snapshot (null if the pet has not dueled).
+export async function getDuelParent(petId: number, duelsLeftByPet?: Record<string, number>, genByPet?: Record<string, number>): Promise<ParentInput | null> {
+  const { data: p } = await db().from("pets").select("*").eq("id", petId).maybeSingle();
+  if (!p) return null;
+  const mid = (a: unknown, b: unknown) => (a != null && b != null ? Math.round((Number(a) + Number(b)) / 2) : null);
+  const s = mid(p.start_min, p.start_max), sp = mid(p.speed_min, p.speed_max), st = mid(p.stamina_min, p.stamina_max), f = mid(p.finish_min, p.finish_max);
+  const rarityIdx = p.rarity as number | null;
+  // Generation: a Duelborn's generation is indexed in the lineage; every other Gigling is genesis
+  // (gen 1). Both are verifiable, never guessed.
+  const generation = genByPet && genByPet[String(petId)] != null ? genByPet[String(petId)] : 1;
+  return {
+    petId,
+    sex: (p.gender as "male" | "female" | null) ?? null,
+    rarity: rarityIdx != null && rarityIdx >= 0 && rarityIdx < RARITY_TIERS.length ? (RARITY_TIERS[rarityIdx] as Rarity) : null,
+    generation,
+    factionId: (p.faction as number | null) ?? null,
+    factionName: (p.faction_name as string | null) ?? null,
+    racesRun: (p.races_run as number | null) ?? null,
+    duelsLeft: duelsLeftByPet && duelsLeftByPet[String(petId)] != null ? duelsLeftByPet[String(petId)] : null,
+    stats: s != null && sp != null && st != null && f != null ? { start: s, speed: sp, stamina: st, finish: f } : null,
+  };
+}
+
+export interface DuelPreviewResult { a: ParentInput; b: ParentInput; preview: BreedingPreview }
+
+export async function getDuelPreview(petIdA: number, petIdB: number): Promise<DuelPreviewResult | null> {
+  const { data: snap } = await db().from("sync_state").select("value").eq("key", "duel_stats_v1").maybeSingle();
+  const blob = snap?.value as { duelsLeftByPet?: Record<string, number>; lineage?: { offspringPetId: number; generation: number }[] } | undefined;
+  const dl = blob?.duelsLeftByPet ?? {};
+  const genByPet: Record<string, number> = {};
+  for (const e of blob?.lineage ?? []) genByPet[String(e.offspringPetId)] = e.generation;
+  const [a, b] = await Promise.all([getDuelParent(petIdA, dl, genByPet), getDuelParent(petIdB, dl, genByPet)]);
+  if (!a || !b) return null;
+  return { a, b, preview: breedingPreview(a, b) };
+}
+
+// ---- Duel: global stats + eligibility radar (read-only, from indexed data) -----------------
+export interface DuelGlobalStats { duelsResolved: number; duelbornMinted: number; challengeFeesWei: string; listingsCreated: number }
+
+export async function getDuelGlobalStats(): Promise<DuelGlobalStats | null> {
+  const { data } = await db().from("sync_state").select("value").eq("key", "duel_stats_v1").maybeSingle();
+  const v = data?.value as DuelGlobalStats | undefined;
+  if (!v || v.duelsResolved == null) return null;
+  return v;
+}
+
+export type DuelEligStatus = "eligible" | "approaching" | "danger" | "ineligible";
+export interface DuelRadarPet {
+  petId: number; name: string | null; sex: "male" | "female" | null;
+  racesRun: number; racesToGo: number; status: DuelEligStatus;
+  duelsLeft: number | null; rarity: string | null;
+}
+export interface DuelRadar {
+  address: string; asOf: string | null;
+  eligibleMales: DuelRadarPet[]; eligibleFemales: DuelRadarPet[];
+  approaching: DuelRadarPet[]; danger: DuelRadarPet[];
+  counts: { eligible: number; approaching: number; danger: number; total: number };
+}
+
+// Duel eligibility radar for any address, computed from PADDOCK'S OWN indexed pet/race data (no
+// N+1 live calls): >=40 races + gender = eligible (split by sex so pairings are visible); within
+// 10 races = approaching; on a fatal final duel (duels_left == 1, from the duel index) = danger.
+export async function getDuelRadar(address: string): Promise<DuelRadar> {
+  const owner = address.toLowerCase();
+  const { data: pets } = await db()
+    .from("pets")
+    .select("id, name, gender, races_run, rarity")
+    .eq("owner_address", owner)
+    .order("races_run", { ascending: false })
+    .limit(2000);
+
+  // Per-pet duels-left from the duel-index snapshot (sync_state, no extra table). A pet with no
+  // duel history is absent here, so it defaults to "unknown" (null) and falls back to race-based
+  // eligibility. The snapshot records pets that have dueled (fallen, or duels consumed).
+  const { data: snap } = await db().from("sync_state").select("value").eq("key", "duel_stats_v1").maybeSingle();
+  const dlBlob = (snap?.value as { duelsLeftByPet?: Record<string, number> } | undefined)?.duelsLeftByPet ?? {};
+  const duelsLeft = new Map<number, number>(Object.entries(dlBlob).map(([k, v]) => [Number(k), v]));
+
+  const MIN = 40, NEAR = 10;
+  const rows: DuelRadarPet[] = (pets ?? []).map((p) => {
+    const races = (p.races_run as number) ?? 0;
+    const sex = (p.gender as "male" | "female" | null) ?? null;
+    const dl = duelsLeft.has(p.id as number) ? duelsLeft.get(p.id as number)! : null;
+    let status: DuelEligStatus;
+    if (dl != null && dl <= 0) status = "ineligible";
+    else if (dl === 1) status = "danger";
+    else if (races >= MIN) status = "eligible";
+    else if (races >= MIN - NEAR) status = "approaching";
+    else status = "ineligible";
+    return { petId: p.id as number, name: (p.name as string) ?? null, sex, racesRun: races, racesToGo: Math.max(0, MIN - races), status, duelsLeft: dl, rarity: (p.rarity as string) ?? null };
+  });
+
+  const eligible = rows.filter((r) => r.status === "eligible");
+  const { data: sync } = await db().from("sync_state").select("updated_at").eq("key", "races_scan").maybeSingle();
+  return {
+    address: owner, asOf: (sync?.updated_at as string) ?? null,
+    eligibleMales: eligible.filter((r) => r.sex === "male"),
+    eligibleFemales: eligible.filter((r) => r.sex === "female"),
+    approaching: rows.filter((r) => r.status === "approaching").sort((a, b) => a.racesToGo - b.racesToGo),
+    danger: rows.filter((r) => r.status === "danger"),
+    counts: { eligible: eligible.length, approaching: rows.filter((r) => r.status === "approaching").length, danger: rows.filter((r) => r.status === "danger").length, total: rows.length },
+  };
+}
