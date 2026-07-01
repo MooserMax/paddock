@@ -2127,7 +2127,9 @@ export async function getDuelRadar(address: string): Promise<DuelRadar> {
     else if (races >= MIN) status = "eligible";
     else if (races >= MIN - NEAR) status = "approaching";
     else status = "ineligible";
-    return { petId: p.id as number, name: (p.name as string) ?? null, sex, racesRun: races, racesToGo: Math.max(0, MIN - races), status, duelsLeft: dl, rarity: (p.rarity as string) ?? null };
+    const rIdx = p.rarity as number | null;
+    const rarityName = rIdx != null && rIdx >= 0 && rIdx < RARITY_TIERS.length ? RARITY_TIERS[rIdx] : null;
+    return { petId: p.id as number, name: (p.name as string) ?? null, sex, racesRun: races, racesToGo: Math.max(0, MIN - races), status, duelsLeft: dl, rarity: rarityName };
   });
 
   const eligible = rows.filter((r) => r.status === "eligible");
