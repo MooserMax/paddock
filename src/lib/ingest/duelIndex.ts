@@ -7,6 +7,7 @@ import {
   decodeListingCreated, decodeDuelEngaged, decodeOffspringMinted, decodeFallen, decodeDuelResolved,
 } from "../duel";
 import { MAX_DUELS } from "../duelRules";
+import { hydrateMissingPets } from "./pets";
 
 // Duel indexer: scans PetDuelingSystem from its first activity to head, building the duel global
 // stats (duels resolved, Duelborn minted, challenge fees), the lineage (offspring -> parents ->
@@ -118,5 +119,16 @@ export async function indexDuels(): Promise<DuelStatsSnapshot> {
     lastIndexedBlock: head, generatedAt: new Date().toISOString(),
   };
   await setSyncState(DUEL_STATS_KEY, snapshot);
+
+  // Every Duelborn (OffspringMinted) and every duel participant must exist in the pets table so
+  // /pet/[id] resolves instead of 404-ing. Offspring are minted on-chain but never enter pets via
+  // the racer sync (they have no races yet), so hydrate them (and any parent/fallen we are missing)
+  // from the canonical Gigaverse pet source. Best-effort: a hydration hiccup never fails the index.
+  try {
+    const duelPetIds: number[] = [];
+    for (const e of lineage) { duelPetIds.push(e.offspringPetId, e.parents[0], e.parents[1]); if (e.fallenPetId != null) duelPetIds.push(e.fallenPetId); }
+    await hydrateMissingPets(duelPetIds);
+  } catch { /* leave hydration to the model-fit pass */ }
+
   return snapshot;
 }

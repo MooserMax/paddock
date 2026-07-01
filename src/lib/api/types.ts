@@ -94,7 +94,19 @@ export interface PetDossier {
   recentSalesWidened: boolean; // true when recentSales are collection-wide, not rarity-matched
   recentRaces: RaceHistoryItem[];
   records: PetDistanceRecord[]; // this horse's best time per distance where it ranks
+  neverRaced: boolean; // true when this Gigling has no race history (all stats are floor-to-ceiling ranges)
+  duelborn: DuelbornRef | null; // set when this Gigling was minted from a duel (a Duelborn)
+  limited: boolean; // true when we hold only partial data (pet pruned upstream, rendered from duel lineage)
   meta: { lastSyncedAt: string | null; source: string };
+}
+
+// A Duelborn's on-chain lineage: which generation, and the two parents it was bred from. The
+// fallen parent is the one that was permanently destroyed to mint it.
+export interface DuelbornRef {
+  generation: number;
+  parents: [number, number];
+  fallenParentId: number | null;
+  survivorParentId: number | null;
 }
 
 // One real comparable sale, from the marketplace sales pool. Never fabricated.

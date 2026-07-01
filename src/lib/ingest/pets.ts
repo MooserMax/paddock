@@ -77,6 +77,23 @@ export async function syncPetIds(ids: number[]): Promise<number> {
   return synced;
 }
 
+// Ensure every id is present in the pets table, syncing from the canonical Gigaverse pet source
+// only the ones we are missing. This is how Duelborn (and any pet that appears in a duel but was
+// never synced as a racer) get written into pets so /pet/[id] resolves instead of 404-ing. Polite
+// and idempotent: already-known ids are skipped, only the gaps are fetched.
+export async function hydrateMissingPets(ids: number[]): Promise<{ checked: number; missing: number; synced: number }> {
+  const uniq = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
+  if (uniq.length === 0) return { checked: 0, missing: 0, synced: 0 };
+  const existing = new Set<number>();
+  for (let i = 0; i < uniq.length; i += 1000) {
+    const { data } = await db().from("pets").select("id").in("id", uniq.slice(i, i + 1000));
+    for (const r of data ?? []) existing.add(r.id as number);
+  }
+  const missing = uniq.filter((id) => !existing.has(id));
+  const synced = missing.length ? await syncPetIds(missing) : 0;
+  return { checked: uniq.length, missing: missing.length, synced };
+}
+
 export interface RollingSyncResult {
   candidates: number;
   synced: number;

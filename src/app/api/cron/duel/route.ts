@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   try {
     const r = await indexDuels();
     let model = null;
-    try { const m = await fitDuelModel(); model = { n: m.n, rarityBacktest: m.rarity.backtest, fallN: m.fall.n, factionInherit: m.faction.inheritRate }; }
+    try { const m = await fitDuelModel(); model = { n: m.n, backtest: m.backtest, fallN: m.fall.n, factionInherit: m.faction.inheritRate }; }
     catch (e) { model = { error: e instanceof Error ? e.message : String(e) }; }
     return NextResponse.json({ ok: true, duelsResolved: r.duelsResolved, duelbornMinted: r.duelbornMinted, listingsCreated: r.listingsCreated, duelsEngaged: r.duelsEngaged, restores: r.restores, challengeFeesWei: r.challengeFeesWei, lineageCount: r.lineage.length, parentsBurned: r.parentsBurned, gen2Pct: r.gen2Pct, lastIndexedBlock: r.lastIndexedBlock, model });
   } catch (err) {

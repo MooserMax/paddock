@@ -50,8 +50,11 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
   const d = await load(params.id);
   if (!d) notFound();
 
-  const neverRaced = !d.hatched || d.shark.racesRun === 0;
+  const neverRaced = d.neverRaced;
+  const born = d.duelborn;
   const statKeys = ["start", "speed", "stamina", "finish"] as const;
+  const statLows = statKeys.map((k) => d.stats[k].low).filter((x): x is number => x != null);
+  const statFloor = statLows.length ? Math.min(...statLows) : 0;
 
   return (
     <div className="mx-auto max-w-page px-4 py-8 md:px-6 md:py-12">
@@ -73,6 +76,13 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="type-page-title text-ink">{d.name ?? `#${d.id}`}</h1>
               <RarityBadge rarity={d.rarity.value} />
+              {born && (
+                <span className="inline-flex items-center rounded-full border px-2.5 py-0.5" style={{ borderColor: "var(--gold)" }}>
+                  <span className="type-micro uppercase tracking-wider" style={{ color: "var(--gold)" }}>
+                    Duelborn · gen {born.generation}{neverRaced ? " · not yet raced" : ""}
+                  </span>
+                </span>
+              )}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
               <span className="type-data text-ink-soft">{d.faction.name}</span>
@@ -102,25 +112,63 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
         </div>
       </header>
 
-      {/* Headline scores */}
-      <div className="assemble mt-8 grid grid-cols-2 gap-px overflow-hidden rounded-lg border hairline md:grid-cols-4" style={{ background: "var(--line)", animationDelay: "60ms" }}>
-        <ScoreCell label="Confirmed quality" value={formatScore(d.scores.confirmedQuality)} sub="proven, revealed only" accent="var(--gold)" />
-        <ScoreCell label="Upside" value={formatScore(d.scores.upside)} sub="potential, not proof" accent="var(--cyan)" />
-        <ScoreCell label="Best distance" value={`${d.scores.bestDistance}m`} sub={TRACK_LABEL[d.scores.bestDistance]?.split(" ")[1] ?? ""} accent="var(--glow)" />
-        <ScoreCell
-          label="Win rate"
-          value={d.shark.racesRun ? formatPct(d.shark.wins / d.shark.racesRun) : "0%"}
-          sub={d.shark.racesRun ? `${d.shark.wins} of ${d.shark.racesRun}` : "no races yet"}
-          accent="var(--green)"
-        />
-      </div>
+      {/* Limited record: we hold only this pet's duel appearance, not a full synced profile. */}
+      {d.limited && (
+        <div className="assemble mt-6 rounded-lg border p-4" style={{ borderColor: "var(--gold)", background: "color-mix(in srgb, var(--gold) 8%, transparent)" }}>
+          <p className="type-card-title text-ink">Limited record</p>
+          <p className="type-body mt-1 text-ink-soft">This Gigling is not fully indexed yet. We show what its duel record tells us; race stats and traits will appear once it is synced.</p>
+        </div>
+      )}
 
-      {neverRaced && (
-        <div className="assemble mt-6 rounded-lg border p-5" style={{ borderColor: "var(--cyan)", background: "color-mix(in srgb, var(--cyan) 8%, transparent)" }}>
-          <p className="type-card-title text-ink">All potential. Nothing proven yet.</p>
+      {/* Parentage, for any Duelborn. Both parents link out; the fallen one is marked. */}
+      {born && (
+        <div className="assemble mt-6 rounded-lg border hairline p-4" style={{ background: "var(--paper-raised)", animationDelay: "40ms" }}>
+          <p className="eyebrow mb-2">Parentage</p>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+            {born.parents.map((pid) => {
+              const fell = pid === born.fallenParentId;
+              return (
+                <span key={pid} className="type-data">
+                  <Link href={`/pet/${pid}`} className="transition-paddock text-ink hover:text-glow">#{pid}</Link>{" "}
+                  <span className="type-micro uppercase tracking-wider" style={{ color: fell ? "var(--brick)" : "var(--green)" }}>
+                    {fell ? "fell (destroyed)" : "survived"}
+                  </span>
+                </span>
+              );
+            })}
+            <span className="type-micro normal-case text-ink-faint">Gender is inherited from the parent that fell.</span>
+          </div>
+        </div>
+      )}
+
+      {/* Headline scores: shown only for a horse that has actually raced. A never-raced Gigling has
+          no win rate, no confirmed quality, and no proven best distance, so we do not print a
+          misleading 0; we show its potential and the rarity floor instead. */}
+      {!neverRaced ? (
+        <div className="assemble mt-8 grid grid-cols-2 gap-px overflow-hidden rounded-lg border hairline md:grid-cols-4" style={{ background: "var(--line)", animationDelay: "60ms" }}>
+          <ScoreCell label="Confirmed quality" value={formatScore(d.scores.confirmedQuality)} sub="proven, revealed only" accent="var(--gold)" />
+          <ScoreCell label="Upside" value={formatScore(d.scores.upside)} sub="potential, not proof" accent="var(--cyan)" />
+          <ScoreCell label="Best distance" value={`${d.scores.bestDistance}m`} sub={TRACK_LABEL[d.scores.bestDistance]?.split(" ")[1] ?? ""} accent="var(--glow)" />
+          <ScoreCell
+            label="Win rate"
+            value={formatPct(d.shark.wins / d.shark.racesRun)}
+            sub={`${d.shark.wins} of ${d.shark.racesRun}`}
+            accent="var(--green)"
+          />
+        </div>
+      ) : (
+        <div className="assemble mt-6 rounded-lg border p-5" style={{ borderColor: "var(--cyan)", background: "color-mix(in srgb, var(--cyan) 8%, transparent)", animationDelay: "60ms" }}>
+          <p className="type-card-title text-ink">{born ? `Duelborn, gen ${born.generation}, not yet raced.` : "All potential. Nothing proven yet."}</p>
           <p className="type-body mt-1 text-ink-soft">
-            This Gigling has not raced, so every stat is a wide range and every trait star is hidden. Its score below is upside, the lottery-ticket read, not a confirmed grade. Race it to start revealing.
+            {born
+              ? "Traits and exact stats reveal as this Gigling races. Until then, every stat sits between its rarity floor and 100, and no trait stars are known. Win rate, ELO, best distance, and finishing record are pending its first races."
+              : "This Gigling has not raced, so every stat is a wide range and every trait star is hidden. Race it to start revealing."}
           </p>
+          <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border hairline sm:grid-cols-3" style={{ background: "var(--line)" }}>
+            <ScoreCell label="Rarity floor" value={String(statFloor)} sub={`${d.rarity.name} minimum, ceiling 100`} accent="var(--gold)" />
+            <ScoreCell label="Upside" value={formatScore(d.scores.upside)} sub="potential, not proof" accent="var(--cyan)" />
+            <ScoreCell label="Win rate" value="pending" sub="reveals through racing" accent="var(--ink-faint)" />
+          </div>
         </div>
       )}
 
@@ -145,7 +193,9 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
           <Panel eyebrow="Traits" title="Carried from birth, stars revealed at milestones" note="Each trait shows its study-measured win-rate lift.">
             <div>
               {d.traits.length === 0 ? (
-                <p className="type-data text-ink-faint">No traits on record for this Gigling.</p>
+                <p className="type-data text-ink-faint">
+                  {neverRaced ? "Traits are hidden at birth and reveal only as this Gigling races. They cannot be predicted from current data." : "No traits on record for this Gigling."}
+                </p>
               ) : (
                 d.traits.map((t) => <TraitRow key={t.id} trait={t} />)
               )}
@@ -156,18 +206,28 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
         {/* Track fit + valuation + shark. Sticky on desktop so the shorter rail
             follows the long stats column instead of leaving a void. */}
         <div className="space-y-6 lg:sticky lg:top-20 lg:self-start">
-          <Panel eyebrow="Track fit" title={`Best at ${d.scores.bestDistance}m`} note="From the study's trait-by-distance lifts and the revealed stat profile.">
-            <TrackFitBars fit={d.scores.fit} best={d.scores.bestDistance} />
-          </Panel>
+          {/* Track fit and the finishing record are race-derived. For a never-raced Gigling they
+              would be fabricated from an empty profile, so they are shown as pending instead. */}
+          {!neverRaced ? (
+            <>
+              <Panel eyebrow="Track fit" title={`Best at ${d.scores.bestDistance}m`} note="From the study's trait-by-distance lifts and the revealed stat profile.">
+                <TrackFitBars fit={d.scores.fit} best={d.scores.bestDistance} />
+              </Panel>
 
-          <Panel eyebrow="Shark profile" title="Finishing record">
-            <dl className="grid grid-cols-2 gap-4">
-              <Stat label="Shrunk win rate" value={formatPct(d.shark.shrunkWinRate)} />
-              <Stat label="Raw record" value={d.shark.racesRun ? `${d.shark.wins}/${d.shark.racesRun}` : "none"} />
-              <Stat label="ELO" value={d.shark.elo != null ? String(Math.round(d.shark.elo)) : "unrated"} />
-              <Stat label="Raw win rate" value={d.shark.rawWinRate != null ? formatPct(d.shark.rawWinRate) : "n/a"} />
-            </dl>
-          </Panel>
+              <Panel eyebrow="Shark profile" title="Finishing record">
+                <dl className="grid grid-cols-2 gap-4">
+                  <Stat label="Shrunk win rate" value={formatPct(d.shark.shrunkWinRate)} />
+                  <Stat label="Raw record" value={d.shark.racesRun ? `${d.shark.wins}/${d.shark.racesRun}` : "none"} />
+                  <Stat label="ELO" value={d.shark.elo != null ? String(Math.round(d.shark.elo)) : "unrated"} />
+                  <Stat label="Raw win rate" value={d.shark.rawWinRate != null ? formatPct(d.shark.rawWinRate) : "n/a"} />
+                </dl>
+              </Panel>
+            </>
+          ) : (
+            <Panel eyebrow="Track fit and finishing record" title="Pending first races">
+              <p className="type-data text-ink-soft">Best distance, ELO, win rate, and finishing record reveal only as this Gigling races. We do not estimate them from an empty profile.</p>
+            </Panel>
+          )}
 
           <Panel eyebrow="Valuation" title="Comparable-sales band">
             {d.valuation.thin ? (

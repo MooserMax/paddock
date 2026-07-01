@@ -14,6 +14,8 @@ import { materializeStableSkill } from "../src/lib/ingest/stableSkill";
 import { materializeRecords } from "../src/lib/ingest/records";
 import { runCalibration } from "../src/lib/ingest/calibration";
 import { syncAccounts } from "../src/lib/ingest/accounts";
+import { indexDuels } from "../src/lib/ingest/duelIndex";
+import { fitDuelModel } from "../src/lib/ingest/duelModel";
 
 async function run(name: string, fn: () => Promise<unknown>) {
   const t = Date.now();
@@ -38,6 +40,9 @@ await run("scores", () => materializeScores());
 await run("stable-skill", () => materializeStableSkill());
 await run("records", () => materializeRecords());
 await run("calibration", () => runCalibration());
+// Duel index + empirical model + training set (also hydrates Duelborn into pets).
+await run("duel-index", () => indexDuels());
+await run("duel-model", () => fitDuelModel());
 // No duration cap here, so backfill every displayed owner (all four boards,
 // including top earners) in one pass.
 await run("accounts", () => syncAccounts({ maxLookups: 3000, refreshDays: 14, includeEarnings: true }));

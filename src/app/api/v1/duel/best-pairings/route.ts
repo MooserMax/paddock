@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   const address = req.nextUrl.searchParams.get("address");
   if (!address || !isAddress(address)) return badRequest("A valid wallet address is required.");
   const goalRaw = req.nextUrl.searchParams.get("goal");
-  const goal = goalRaw === "rarity" ? "rarity" : "value";
+  const goal = goalRaw === "rarity" || goalRaw === "preserve" || goalRaw === "cheapest" ? goalRaw : "best";
   return guard(async () => {
     const result = await getBestPairings(address, goal);
     return ok(result, { sMaxAge: 60, staleWhileRevalidate: 300 });

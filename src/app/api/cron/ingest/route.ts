@@ -13,6 +13,7 @@ import { runRaceGasCron } from "@/lib/ingest/raceGas";
 import { computePaidVolume24h } from "@/lib/ingest/paidVolume";
 import { computeJuiceRevenue } from "@/lib/ingest/juice";
 import { indexDuels } from "@/lib/ingest/duelIndex";
+import { fitDuelModel } from "@/lib/ingest/duelModel";
 import { getSyncState, setSyncState } from "@/lib/syncState";
 
 export const dynamic = "force-dynamic";
@@ -68,6 +69,12 @@ const RACE_GAS_LAST_RUN_KEY = "race_gas_last_run";
 const JUICE_MIN_INTERVAL_MS = 30 * 60_000;
 const JUICE_START_BY_MS = 18_000;
 const JUICE_LAST_RUN_KEY = "juice_last_run";
+// Duel empirical model + training set: refit from the resolved-duel feed and hydrate any Duelborn
+// missing from pets. Gated like the others (min-interval + early-start) so it only runs with spare
+// budget; the fetch is a handful of pages, so it lands in a few seconds when it does run.
+const DUEL_MODEL_MIN_INTERVAL_MS = 15 * 60_000;
+const DUEL_MODEL_START_BY_MS = 20_000;
+const DUEL_MODEL_LAST_RUN_KEY = "duel_model_last_run";
 const LOCK_KEY = "ingest_lock";
 const LOCK_TTL_MS = 90_000; // a crashed run self-releases after this
 
@@ -288,6 +295,28 @@ export async function GET(req: NextRequest) {
       }
     } else {
       steps.duelsSkipped = "soft deadline";
+    }
+
+    // 3h. Duel empirical model + training set: refit from the resolved-duel feed (rarity/gen/gender/
+    //     faction/stat-floor tables + backtests), store the labeled rows the /duel feed teaches from,
+    //     and hydrate any Duelborn missing from pets. Gated (min-interval + early-start) so it only
+    //     runs with spare budget; fault isolated.
+    if (timeLeft()) {
+      try {
+        const lastDm = await getSyncState<{ at: number }>(DUEL_MODEL_LAST_RUN_KEY);
+        const dueDm = !lastDm || t0 - (lastDm.at ?? 0) >= DUEL_MODEL_MIN_INTERVAL_MS;
+        if (dueDm && Date.now() < t0 + DUEL_MODEL_START_BY_MS) {
+          const m = await fitDuelModel();
+          steps.duelModel = { n: m.n, rarity: m.backtest.rarity };
+          await setSyncState(DUEL_MODEL_LAST_RUN_KEY, { at: Date.now() });
+        } else {
+          steps.duelModelSkipped = dueDm ? "deadline" : "interval";
+        }
+      } catch (e) {
+        steps.duelModelError = msg(e);
+      }
+    } else {
+      steps.duelModelSkipped = "soft deadline";
     }
 
     // 4. Resolve Gigaverse usernames for a small slice of displayed owners, in

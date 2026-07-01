@@ -106,7 +106,11 @@ export function expectedStats(a: ParentInput, b: ParentInput): Outcome<{ start: 
 export interface PairingValidation { ok: boolean; errors: string[]; warnings: string[] }
 
 // Validate a pairing against the contract rules (mirrors the on-chain errors: opposite genders,
-// 40+ races each, an unspent duel each, not two final-duel pets). Surfaces fatal-final-duel danger.
+// 40+ races each, an unspent duel each). NOTE: which parent falls is CHOSEN by the breeder via Host
+// Favour (aggressionBps), not forced by duels-left. Verified on the resolved set: pets with one
+// duel left survived, and pets with a full three duels left were the ones sacrificed. So we do NOT
+// claim a "fatal final duel" from duels-left; the only certain fall is a forced final duel, which
+// is a per-listing flag not known for a hypothetical pairing.
 export function validatePairing(a: ParentInput, b: ParentInput): PairingValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -117,13 +121,6 @@ export function validatePairing(a: ParentInput, b: ParentInput): PairingValidati
     if (p.duelsLeft != null && p.duelsLeft <= 0) errors.push(`Gigling ${p.petId} has no duels left (NoDuelsLeft).`);
   }
   if (a.petId === b.petId) errors.push("SamePet: a Gigling cannot duel itself.");
-
-  const aFinal = a.duelsLeft === 1, bFinal = b.duelsLeft === 1;
-  if (aFinal && bFinal) errors.push("BothPetsOnLastDuel: two final-duel Giglings cannot meet (each must face a partner with >=2 duels left).");
-  else {
-    if (aFinal) warnings.push(`Gigling ${a.petId} is on its FATAL final duel: it WILL fall and become the Duelborn (gender ${a.sex ?? "?"}).`);
-    if (bFinal) warnings.push(`Gigling ${b.petId} is on its FATAL final duel: it WILL fall and become the Duelborn (gender ${b.sex ?? "?"}).`);
-  }
   return { ok: errors.length === 0, errors, warnings };
 }
 
@@ -146,18 +143,16 @@ export interface BreedingPreview {
 export function breedingPreview(a: ParentInput, b: ParentInput): BreedingPreview {
   const valid = validatePairing(a, b);
   const gen = a.generation != null && b.generation != null ? duelbornGeneration(a.generation, b.generation) : null;
-  const aFinal = a.duelsLeft === 1, bFinal = b.duelsLeft === 1;
-  const forcedFallen = aFinal && !bFinal ? a.petId : bFinal && !aFinal ? b.petId : null;
-  const fallenSex = forcedFallen === a.petId ? a.sex : forcedFallen === b.petId ? b.sex : null;
+  // The fall is the breeder's choice via Host Favour (max fells the challenger, min fells the host),
+  // so there is no pre-determined Fallen for a hypothetical pairing. forcedFallen stays null.
+  const forcedFallen = null;
 
   return {
     valid,
     certain: {
       generation: gen,
       generationBonus: gen != null ? generationBonus(gen) : null,
-      genderRule: forcedFallen != null
-        ? `Gender is CERTAIN ${fallenSex ?? "?"}: ${forcedFallen} is on its final duel, so it is the Fallen and the Duelborn takes its gender.`
-        : "Gender = the Fallen's gender (certain once the duel resolves; set Host Favour to influence who falls).",
+      genderRule: "Gender equals the parent that falls, and you choose who falls via Host Favour: set it to sacrifice the parent whose gender you want the Duelborn to inherit.",
       forcedFallen,
     },
     odds: { faction: factionOdds(a, b), expectedStats: expectedStats(a, b) },
