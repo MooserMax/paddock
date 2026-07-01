@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import Image from "next/image";
 import Link from "next/link";
+import PetPortrait from "@/components/PetPortrait";
 import type { Metadata } from "next";
 import { api } from "@/lib/api/client";
 import { ApiClientError } from "@/lib/api/client";
@@ -60,16 +60,7 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
     <div className="mx-auto max-w-page px-4 py-8 md:px-6 md:py-12">
       {/* Identity header */}
       <header className="assemble grid gap-6 md:grid-cols-[200px_1fr] md:gap-8">
-        <div
-          className="relative aspect-square w-full overflow-hidden rounded-lg border hairline bg-dotgrid"
-          style={{ maxWidth: 200 }}
-        >
-          {d.imgUrl ? (
-            <Image src={d.imgUrl} alt={`Gigling #${d.id}`} width={200} height={200} className="h-full w-full object-cover" priority />
-          ) : (
-            <div className="flex h-full items-center justify-center type-micro text-ink-faint">no image</div>
-          )}
-        </div>
+        <PetPortrait src={d.imgUrl} alt={`Gigling #${d.id}`} size={200} />
 
         <div className="flex flex-col justify-between gap-4">
           <div>

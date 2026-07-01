@@ -2123,18 +2123,30 @@ interface ParentProfile {
   topTrait: string | null; valueEth: number | null; quality: number; // quality = the single racer-strength number we rank on
 }
 
-export interface PairingParentRef { petId: number; name: string | null; rarity: string | null }
+export interface PairingParentRef {
+  petId: number; name: string | null; rarity: string | null;
+  cq: number; winRate: number | null; bestDistance: number; topTrait: string | null; elo: number | null; isFinal: boolean;
+}
 export interface PairingSuggestion {
   male: PairingParentRef;
   female: PairingParentRef;
   predictedRarity: { name: string; pct: number; n: number; basis: string };
   distribution: { rarity: number; name: string; pct: number }[];
-  upgradeChancePct: number; // P(offspring rarity > the lower parent rarity)
+  distributionN: number;          // cell total behind the distribution (0 when documented-rule)
+  distributionBasis: "data" | "documented";
+  upgradeChancePct: number;       // P(offspring rarity > the lower parent rarity)
+  climbObserved: { count: number; total: number } | null; // observed climbs / cell total (data basis only)
+  expectedRarity: number;         // probability-weighted mean offspring rarity (the CHASE RARITY metric)
+  reachStableMaxPct: number;      // P(offspring rarity >= the stable's highest parent rarity)
   generation: number | null;
   statFloor: number | null;
-  fallenPetId: number; // the parent we recommend sacrificing (the weaker/cheaper racer)
+  faction: { inheritRatePct: number; n: number } | null;
+  fallenPetId: number; // the parent that falls (recommended sacrifice, or forced when one is final)
   keptPetId: number;   // the proven racer you keep
-  offspringGender: string | null; // = the fallen parent's sex (your choice via Host Favour)
+  offspringGender: string | null; // = the fallen parent's sex
+  forced: boolean;      // true when one parent is on its final duel: the fall is deterministic
+  forcedNote: string | null;
+  leavesKeptOnFinal: number | null; // petId left on its own final duel after this pairing, if any
   valuation: { burnedEth: number | null; gainedEth: number | null; netEth: number | null; verdict: "worth" | "even" | "not" | "unknown"; note: string };
   why: string;
   score: number;
@@ -2194,59 +2206,89 @@ async function parentProfiles(ids: number[], genByPet: Record<string, number>): 
 // indexed data + the fitted model; no per-pet live calls.
 export async function getBestPairings(address: string, goal: PairingGoal = "best"): Promise<BestPairings> {
   const [radar, model] = await Promise.all([getDuelRadar(address), loadDuelModel()]);
-  // Viable = eligible (>=40 races, gender known) AND has an unspent duel (duelsLeft > 0, or unknown).
-  const viable = (r: DuelRadarPet) => r.duelsLeft == null || r.duelsLeft > 0;
-  const males = radar.eligibleMales.filter(viable), females = radar.eligibleFemales.filter(viable);
+  // The viable pool includes final-duel pets (they can breed, as the designated sacrifice). The
+  // pairing rules below enforce that a final pet only meets a partner with >= 2 duels left and that
+  // two final pets never meet.
+  const males = radar.eligibleMales, females = radar.eligibleFemales;
+  const radarById = new Map<number, DuelRadarPet>([...males, ...females].map((r) => [r.petId, r]));
 
   const { data: snap } = await db().from("sync_state").select("value").eq("key", "duel_stats_v1").maybeSingle();
   const genByPet: Record<string, number> = {};
   for (const e of (snap?.value as { lineage?: { offspringPetId: number; generation: number }[] } | undefined)?.lineage ?? []) genByPet[String(e.offspringPetId)] = e.generation;
   const profiles = await parentProfiles([...new Set([...males, ...females].map((r) => r.petId))], genByPet);
 
+  const stableMaxRarity = Math.max(0, ...[...profiles.values()].map((p) => p.rarityIdx));
+  const parentRef = (p: ParentProfile, isFinal: boolean): PairingParentRef => ({
+    petId: p.petId, name: p.name, rarity: p.rarityName, cq: Math.round(p.cq), winRate: p.winRate, bestDistance: p.bestDistance, topTrait: p.topTrait, elo: p.elo, isFinal,
+  });
+
   const suggestions: PairingSuggestion[] = [];
   for (const m of males) {
     for (const f of females) {
       const pm = profiles.get(m.petId), pf = profiles.get(f.petId);
       if (!pm || !pf || pm.rarityIdx < 0 || pf.rarityIdx < 0) continue;
-      const ra = pm.rarityIdx, rb = pf.rarityIdx, lo = Math.min(ra, rb), hiRar = Math.max(ra, rb);
+      const rm = radarById.get(m.petId)!, rf = radarById.get(f.petId)!;
+      // Rule: two final-duel pets cannot meet; a final pet needs a partner with >= 2 duels left.
+      if (rm.isFinal && rf.isFinal) continue;
+      const forced = rm.isFinal || rf.isFinal;
+      if (forced) {
+        const partner = rm.isFinal ? rf : rm;
+        if (partner.duelsLeft != null && partner.duelsLeft < 2) continue; // partner must have >= 2
+      }
+
+      const ra = pm.rarityIdx, rb = pf.rarityIdx, lo = Math.min(ra, rb);
       const pred = predictRarity(model, ra, rb);
       const upgradeChancePct = pred.distribution.filter((d) => d.rarity > lo).reduce((s, d) => s + d.pct, 0);
-      const reachMaxPct = pred.distribution.filter((d) => d.rarity >= hiRar).reduce((s, d) => s + d.pct, 0);
+      const reachStableMaxPct = pred.distribution.filter((d) => d.rarity >= stableMaxRarity).reduce((s, d) => s + d.pct, 0);
       const expectedRarity = pred.distribution.reduce((s, d) => s + d.rarity * d.pct, 0) / 100;
       const generation = duelbornGeneration(pm.generation, pf.generation);
       const floor = statFloorFor(model, pred.mostLikely).floor;
+      const climbObserved = observedClimb(model, ra, rb);
 
-      // Which parent to sacrifice: the weaker racer (so you keep the better horse); for "cheapest",
-      // the lower-value one. The fall is the breeder's choice via Host Favour, so this is a
-      // recommendation, not a forced outcome.
-      const weaker = pm.quality <= pf.quality ? pm : pf;
-      const stronger = weaker === pm ? pf : pm;
-      const cheaper = (pm.valueEth ?? Infinity) <= (pf.valueEth ?? Infinity) ? pm : pf;
-      const fallen = goal === "cheapest" ? cheaper : weaker;
-      const kept = fallen === pm ? pf : pm;
+      // Who falls. Forced: the final-duel pet falls, deterministically. Otherwise the breeder's
+      // choice, so we recommend the weaker racer (or the cheaper one for the "cheapest" goal).
+      let fallen: ParentProfile, kept: ParentProfile;
+      if (forced) {
+        fallen = rm.isFinal ? pm : pf; kept = fallen === pm ? pf : pm;
+      } else {
+        const weaker = pm.quality <= pf.quality ? pm : pf;
+        const cheaper = (pm.valueEth ?? Infinity) <= (pf.valueEth ?? Infinity) ? pm : pf;
+        fallen = goal === "cheapest" ? cheaper : weaker; kept = fallen === pm ? pf : pm;
+      }
+      const keptRadar = radarById.get(kept.petId)!;
+      // This duel consumes one of the kept parent's duels; if it had exactly 2, it is left on its
+      // own final duel afterward. Only stated when we actually know the count.
+      const leavesKeptOnFinal = keptRadar.duelsLeft === 2 ? kept.petId : null;
 
       const gainVal = rarityValue(model, pred.mostLikely);
       const burnedEth = fallen.valueEth ?? rarityValue(model, fallen.rarityIdx).medianEth;
-      const burnN = fallen.valueEth != null ? 5 : rarityValue(model, fallen.rarityIdx).n; // own-band comps count as supported
       const gainedEth = gainVal.medianEth;
       const netEth = burnedEth != null && gainedEth != null ? Math.round((gainedEth - burnedEth) * 10000) / 10000 : null;
-      const vv = valuationVerdict(burnedEth, gainedEth, burnN, gainVal.n);
+      // A spent pet's resale is lower and our comps cannot separate spent from fresh, so a forced
+      // sacrifice is directional only, never a confident worth/not call.
+      const vv = forced
+        ? { verdict: "unknown" as const, note: "The sacrificed pet is on its final duel (spent); comps do not separate spent pets, so this is directional only." }
+        : valuationVerdict(burnedEth, gainedEth, fallen.valueEth != null ? 5 : rarityValue(model, fallen.rarityIdx).n, gainVal.n);
 
       let score: number;
-      if (goal === "rarity") score = reachMaxPct * 1000 + expectedRarity * 50 + upgradeChancePct;
+      if (goal === "rarity") score = expectedRarity * 1_000_000 + upgradeChancePct * 1_000 + reachStableMaxPct;
       else if (goal === "preserve") score = kept.quality * 2 - fallen.quality + (kept.quality - fallen.quality);
       else if (goal === "cheapest") score = -((fallen.valueEth ?? 9999) * 1000) - fallen.quality;
       else score = expectedRarity * 1000 + kept.quality * 5 + upgradeChancePct; // "best"
 
-      const top = pred.distribution[0];
-      const why = buildWhy(goal, kept, fallen, pred, floor, upgradeChancePct);
+      const forcedNote = forced ? `FORCED: #${fallen.petId} falls, its final duel; the Duelborn is ${fallen.sex ?? "?"} for certain.` : null;
+      const why = buildWhy(goal, kept, fallen, pred, floor, upgradeChancePct, forced);
       suggestions.push({
-        male: { petId: pm.petId, name: pm.name, rarity: pm.rarityName },
-        female: { petId: pf.petId, name: pf.name, rarity: pf.rarityName },
-        predictedRarity: { name: top?.name ?? "?", pct: top?.pct ?? 0, n: pred.n, basis: pred.basis },
-        distribution: pred.distribution,
-        upgradeChancePct, generation, statFloor: floor,
+        male: parentRef(pm, rm.isFinal),
+        female: parentRef(pf, rf.isFinal),
+        predictedRarity: { name: pred.distribution[0]?.name ?? "?", pct: pred.distribution[0]?.pct ?? 0, n: pred.n, basis: pred.basis },
+        distribution: pred.distribution, distributionN: pred.n, distributionBasis: pred.basis,
+        upgradeChancePct, climbObserved,
+        expectedRarity: Math.round(expectedRarity * 100) / 100, reachStableMaxPct,
+        generation, statFloor: floor,
+        faction: model ? { inheritRatePct: Math.round(model.faction.inheritRate * 100), n: model.faction.n } : null,
         fallenPetId: fallen.petId, keptPetId: kept.petId, offspringGender: fallen.sex,
+        forced, forcedNote, leavesKeptOnFinal,
         valuation: { burnedEth, gainedEth, netEth, verdict: vv.verdict, note: vv.note },
         why, score,
       });
@@ -2254,8 +2296,8 @@ export async function getBestPairings(address: string, goal: PairingGoal = "best
   }
   suggestions.sort((a, b) => b.score - a.score);
   const goalLabel: Record<PairingGoal, string> = {
-    best: "predicted offspring blended with the race quality you keep",
-    rarity: "the chance of matching or climbing above your best parent's rarity",
+    best: "expected offspring rarity blended with the race quality you keep",
+    rarity: "expected offspring rarity (probability-weighted mean), then climb chance, then reaching your best parent's tier",
     preserve: "keeping your proven racer and sacrificing the weaker one",
     cheapest: "the lowest-value parent to sacrifice",
   };
@@ -2267,15 +2309,27 @@ export async function getBestPairings(address: string, goal: PairingGoal = "best
   };
 }
 
+// Observed climbs / cell total for a parent-rarity pair, from the empirical table (data basis
+// only). Lets the UI show "0% climbed (0 of N observed)" honestly: an observed zero is not a
+// proven impossibility.
+function observedClimb(model: DuelModel | null, rarityA: number, rarityB: number): { count: number; total: number } | null {
+  const lo = Math.min(rarityA, rarityB), hi = Math.max(rarityA, rarityB);
+  const cell = model?.rarity.byPair[`${lo},${hi}`];
+  if (!cell || cell.total < 5) return null;
+  const count = Object.entries(cell.offsets).reduce((s, [off, c]) => s + (Number(off) > 0 ? c : 0), 0);
+  return { count, total: cell.total };
+}
+
 // One plain-language line per pairing, grounded in Paddock's race data and the fitted rarity model.
-function buildWhy(goal: PairingGoal, kept: ParentProfile, fallen: ParentProfile, pred: RarityPrediction, floor: number | null, upgradePct: number): string {
+function buildWhy(goal: PairingGoal, kept: ParentProfile, fallen: ParentProfile, pred: RarityPrediction, floor: number | null, upgradePct: number, forced: boolean): string {
   const keptTag = [kept.topTrait, kept.cq > 0 ? `CQ ${Math.round(kept.cq)}` : null].filter(Boolean).join(" ");
   const fallenTag = [fallen.topTrait, fallen.cq > 0 ? `CQ ${Math.round(fallen.cq)}` : null].filter(Boolean).join(" ") || "the weaker racer";
   const floorTxt = floor != null ? `; offspring floors at ${pred.mostLikely != null ? RARITY_TIERS[pred.mostLikely] ?? "" : ""} (${floor})` : "";
+  const sacVerb = forced ? "forced sacrifice of" : "sacrifices";
   if (goal === "cheapest") return `Cheapest sacrifice: burn #${fallen.petId} (${fallenTag}), keep #${kept.petId}${floorTxt}.`;
-  if (goal === "rarity") return `Both parents feed a ${pred.distribution[0]?.name ?? "?"} floor; ${upgradePct}% chance to climb${floorTxt}.`;
-  if (goal === "preserve") return `Keeps your #${kept.petId}${keptTag ? ` (${keptTag})` : ""}; sacrifices the weaker #${fallen.petId} (${fallenTag})${floorTxt}.`;
-  return `Keeps #${kept.petId}${keptTag ? ` (${keptTag})` : ""}; sacrifices #${fallen.petId} (${fallenTag}); ${pred.distribution[0]?.name ?? "?"} ${pred.distribution[0]?.pct ?? 0}%${floorTxt}.`;
+  if (goal === "rarity") return `Expected ${pred.distribution[0]?.name ?? "?"}; ${upgradePct}% chance to climb${floorTxt}.`;
+  if (goal === "preserve") return `Keeps your #${kept.petId}${keptTag ? ` (${keptTag})` : ""}; ${sacVerb} #${fallen.petId} (${fallenTag})${floorTxt}.`;
+  return `Keeps #${kept.petId}${keptTag ? ` (${keptTag})` : ""}; ${sacVerb} #${fallen.petId} (${fallenTag}); ${pred.distribution[0]?.name ?? "?"} ${pred.distribution[0]?.pct ?? 0}%${floorTxt}.`;
 }
 
 // ---- Duel: global stats + eligibility radar (read-only, from indexed data) -----------------
@@ -2310,9 +2364,36 @@ export async function getDuelTraining(): Promise<DuelTrainingResponse | null> {
   ]);
   const training = t?.value as DuelTraining | undefined;
   if (!training) return null;
+
+  // Patch any null rarity in the stored rows from the pets table. The listing occasionally omits a
+  // rarity (a burned parent, or an unrevealed offspring at the moment it was captured); the pets
+  // table, hydrated from the canonical source, usually has it, so a row never renders "Unknown"
+  // when we actually know the tier.
+  const rows = training.rows;
+  const nullIds = new Set<number>();
+  for (const r of rows) {
+    if (r.host.rarity == null && r.host.petId) nullIds.add(r.host.petId);
+    if (r.challenger.rarity == null && r.challenger.petId) nullIds.add(r.challenger.petId);
+    if (r.offspring.rarity == null && r.offspring.petId) nullIds.add(r.offspring.petId);
+  }
+  if (nullIds.size > 0) {
+    const rarityById = new Map<number, number>();
+    const ids = [...nullIds];
+    for (let i = 0; i < ids.length; i += 500) {
+      const { data } = await db().from("pets").select("id, rarity").in("id", ids.slice(i, i + 500));
+      for (const p of data ?? []) if (p.rarity != null) rarityById.set(p.id as number, p.rarity as number);
+    }
+    for (const r of rows) {
+      if (r.host.rarity == null) r.host.rarity = rarityById.get(r.host.petId) ?? null;
+      if (r.challenger.rarity == null) r.challenger.rarity = rarityById.get(r.challenger.petId) ?? null;
+      if (r.offspring.rarity == null) r.offspring.rarity = rarityById.get(r.offspring.petId) ?? null;
+      if (r.lowerParentRarity == null && r.host.rarity != null && r.challenger.rarity != null) r.lowerParentRarity = Math.min(r.host.rarity, r.challenger.rarity);
+    }
+  }
+
   return {
     n: training.n,
-    rows: training.rows,
+    rows,
     aggregates: training.aggregates,
     accuracy: model?.backtest ?? null,
     statFloor: model?.statFloor ?? null,
@@ -2320,22 +2401,32 @@ export async function getDuelTraining(): Promise<DuelTrainingResponse | null> {
   };
 }
 
-export type DuelEligStatus = "eligible" | "approaching" | "danger" | "ineligible";
+export type DuelEligStatus = "eligible" | "approaching" | "ineligible";
 export interface DuelRadarPet {
   petId: number; name: string | null; sex: "male" | "female" | null;
   racesRun: number; racesToGo: number; status: DuelEligStatus;
   duelsLeft: number | null; rarity: string | null;
+  isFinal: boolean;          // on its last duel (duels_left === 1): it WILL fall if it duels
+  cq: number | null;         // Paddock confirmed quality, for path/pool ranking
+  topTrait: string | null;   // notable trait (Surger preferred, else highest tier)
 }
 export interface DuelRadar {
   address: string; asOf: string | null;
-  eligibleMales: DuelRadarPet[]; eligibleFemales: DuelRadarPet[];
-  approaching: DuelRadarPet[]; danger: DuelRadarPet[];
-  counts: { eligible: number; approaching: number; danger: number; total: number };
+  eligibleMales: DuelRadarPet[]; eligibleFemales: DuelRadarPet[]; // includes final-duel pets, flagged isFinal
+  approaching: DuelRadarPet[];
+  finalDuel: DuelRadarPet[]; // subset of eligibles on their last duel (the designated-sacrifice play)
+  pathToBreeding: DuelRadarPet[]; // top-10 closest-to-eligible, ranked (racesToGo asc, then cq desc)
+  coverage: { hasEligibleMale: boolean; hasEligibleFemale: boolean; needSex: "male" | "female" | null };
+  counts: { eligible: number; approaching: number; final: number; total: number };
 }
 
+// Threshold above which a not-yet-eligible pet counts as "approaching" (auditable in the UI).
+const DUEL_APPROACH_MIN = 25;
+
 // Duel eligibility radar for any address, computed from PADDOCK'S OWN indexed pet/race data (no
-// N+1 live calls): >=40 races + gender = eligible (split by sex so pairings are visible); within
-// 10 races = approaching; on a fatal final duel (duels_left == 1, from the duel index) = danger.
+// N+1 live calls). A pet with >=40 races and an unspent duel is eligible; if it has exactly one
+// duel left it is eligible-but-FINAL (it will fall). A pet with 25-39 races is approaching; the
+// pathToBreeding list is the top-10 closest-to-eligible so an empty stable becomes a plan.
 export async function getDuelRadar(address: string): Promise<DuelRadar> {
   const owner = address.toLowerCase();
   const { data: pets } = await db()
@@ -2344,42 +2435,83 @@ export async function getDuelRadar(address: string): Promise<DuelRadar> {
     .eq("owner_address", owner)
     .order("races_run", { ascending: false })
     .limit(2000);
+  const petList = (pets ?? []) as { id: number; name: string | null; gender: string | null; races_run: number | null; rarity: number | null }[];
+  const allIds = petList.map((p) => p.id);
 
-  // Per-pet duels-left from the duel-index snapshot (sync_state, no extra table). A pet with no
-  // duel history is absent here, so it defaults to "unknown" (null) and falls back to race-based
-  // eligibility. The snapshot records pets that have dueled (fallen, or duels consumed).
+  // Per-pet duels-left from the duel-index snapshot (sync_state). Absent = unknown (never dueled),
+  // which falls back to race-based eligibility with a full duel allowance.
   const { data: snap } = await db().from("sync_state").select("value").eq("key", "duel_stats_v1").maybeSingle();
   const dlBlob = (snap?.value as { duelsLeftByPet?: Record<string, number> } | undefined)?.duelsLeftByPet ?? {};
   const duelsLeft = new Map<number, number>(Object.entries(dlBlob).map(([k, v]) => [Number(k), v]));
 
-  const MIN = 40, NEAR = 10;
+  // Confirmed quality for path/pool ranking, chunked so a large stable never caps at the row limit.
+  const cqById = new Map<number, number>();
+  for (let i = 0; i < allIds.length; i += 1000) {
+    const { data } = await db().from("pet_scores").select("pet_id, confirmed_quality").in("pet_id", allIds.slice(i, i + 1000));
+    for (const s of data ?? []) if (s.confirmed_quality != null) cqById.set(s.pet_id as number, Number(s.confirmed_quality));
+  }
+
+  const MIN = 40;
   const normSex = (g: unknown): "male" | "female" | null => {
     const s = typeof g === "string" ? g.toLowerCase() : "";
     return s === "male" || s === "female" ? s : null;
   };
-  const rows: DuelRadarPet[] = (pets ?? []).map((p) => {
-    const races = (p.races_run as number) ?? 0;
+  const base = petList.map((p) => {
+    const races = p.races_run ?? 0;
     const sex = normSex(p.gender);
-    const dl = duelsLeft.has(p.id as number) ? duelsLeft.get(p.id as number)! : null;
+    const dl = duelsLeft.has(p.id) ? duelsLeft.get(p.id)! : null;
     let status: DuelEligStatus;
-    if (dl != null && dl <= 0) status = "ineligible";
-    else if (dl === 1) status = "danger";
+    if (dl != null && dl <= 0) status = "ineligible"; // spent or destroyed: cannot breed
     else if (races >= MIN) status = "eligible";
-    else if (races >= MIN - NEAR) status = "approaching";
+    else if (races >= DUEL_APPROACH_MIN) status = "approaching";
     else status = "ineligible";
-    const rIdx = p.rarity as number | null;
+    const rIdx = p.rarity;
     const rarityName = rIdx != null && rIdx >= 0 && rIdx < RARITY_TIERS.length ? RARITY_TIERS[rIdx] : null;
-    return { petId: p.id as number, name: (p.name as string) ?? null, sex, racesRun: races, racesToGo: Math.max(0, MIN - races), status, duelsLeft: dl, rarity: rarityName };
+    return { petId: p.id, name: p.name ?? null, sex, racesRun: races, racesToGo: Math.max(0, MIN - races), status, duelsLeft: dl, rarity: rarityName, isFinal: dl === 1, cq: cqById.get(p.id) ?? null, topTrait: null as string | null };
   });
 
-  const eligible = rows.filter((r) => r.status === "eligible");
+  // The near-eligible development list: any non-eligible, non-spent pet that has raced, ranked by
+  // races remaining (ascending) then confirmed quality (descending) so the user develops the
+  // horses that will matter. Top 10. Traits fetched only for these + the eligibles (bounded).
+  const pathAll = base.filter((r) => r.status !== "eligible" && r.racesRun > 0 && (r.duelsLeft == null || r.duelsLeft > 0))
+    .sort((a, b) => a.racesToGo - b.racesToGo || (b.cq ?? 0) - (a.cq ?? 0));
+  const path = pathAll.slice(0, 10);
+  const eligible = base.filter((r) => r.status === "eligible");
+
+  // topTrait for the display set only (eligibles + path).
+  const traitIds = [...new Set([...eligible, ...path].map((r) => r.petId))];
+  const traitsById = new Map<number, { id: string; tier: number | null; name: string | null }[]>();
+  for (let i = 0; i < traitIds.length; i += 500) {
+    const { data } = await db().from("pet_traits").select("pet_id, trait_id, trait_name, tier").in("pet_id", traitIds.slice(i, i + 500));
+    for (const t of data ?? []) (traitsById.get(t.pet_id as number) ?? traitsById.set(t.pet_id as number, []).get(t.pet_id as number)!).push({ id: t.trait_id as string, tier: t.tier as number | null, name: t.trait_name as string | null });
+  }
+  const topTraitOf = (petId: number): string | null => {
+    const ts = (traitsById.get(petId) ?? []).filter((t) => t.id);
+    if (ts.length === 0) return null;
+    if (ts.find((t) => t.id === "surger")) return "Surger";
+    const best = ts.slice().sort((a, b) => (b.tier ?? 0) - (a.tier ?? 0))[0];
+    return best?.name ?? null;
+  };
+  for (const r of [...eligible, ...path]) r.topTrait = topTraitOf(r.petId);
+
+  const eligibleMales = eligible.filter((r) => r.sex === "male");
+  const eligibleFemales = eligible.filter((r) => r.sex === "female");
+  const hasEligibleMale = eligibleMales.length > 0, hasEligibleFemale = eligibleFemales.length > 0;
+  // Which sex the stable still needs to make a pairing possible. Consider the whole breeding-relevant
+  // pool (eligibles + the development pipeline), so an all-one-sex stable is nudged even before any
+  // pet reaches the approaching threshold. Only flag when a whole side is missing.
+  const pool = [...eligible, ...path];
+  const anyMale = pool.some((r) => r.sex === "male"), anyFemale = pool.some((r) => r.sex === "female");
+  const needSex: "male" | "female" | null = hasEligibleMale && !hasEligibleFemale ? "female" : hasEligibleFemale && !hasEligibleMale ? "male" : anyMale && !anyFemale ? "female" : anyFemale && !anyMale ? "male" : null;
+
   const { data: sync } = await db().from("sync_state").select("updated_at").eq("key", "races_scan").maybeSingle();
   return {
     address: owner, asOf: (sync?.updated_at as string) ?? null,
-    eligibleMales: eligible.filter((r) => r.sex === "male"),
-    eligibleFemales: eligible.filter((r) => r.sex === "female"),
-    approaching: rows.filter((r) => r.status === "approaching").sort((a, b) => a.racesToGo - b.racesToGo),
-    danger: rows.filter((r) => r.status === "danger"),
-    counts: { eligible: eligible.length, approaching: rows.filter((r) => r.status === "approaching").length, danger: rows.filter((r) => r.status === "danger").length, total: rows.length },
+    eligibleMales, eligibleFemales,
+    approaching: base.filter((r) => r.status === "approaching").sort((a, b) => a.racesToGo - b.racesToGo),
+    finalDuel: eligible.filter((r) => r.isFinal),
+    pathToBreeding: path,
+    coverage: { hasEligibleMale, hasEligibleFemale, needSex },
+    counts: { eligible: eligible.length, approaching: base.filter((r) => r.status === "approaching").length, final: eligible.filter((r) => r.isFinal).length, total: base.length },
   };
 }

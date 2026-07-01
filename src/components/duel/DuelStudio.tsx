@@ -1,11 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { DEMO_WALLET } from "@/components/WalletSearch";
+import { useWalletAddress } from "@/lib/walletFlag";
 
-interface RadarPet { petId: number; name: string | null; sex: string | null; racesRun: number; racesToGo: number; status: string; duelsLeft: number | null; rarity: string | null }
-interface Radar { eligibleMales: RadarPet[]; eligibleFemales: RadarPet[]; approaching: RadarPet[]; danger: RadarPet[]; counts: { eligible: number; approaching: number; danger: number; total: number } }
+interface RadarPet { petId: number; name: string | null; sex: string | null; racesRun: number; racesToGo: number; status: string; duelsLeft: number | null; rarity: string | null; isFinal: boolean; cq: number | null; topTrait: string | null }
+interface Radar {
+  eligibleMales: RadarPet[]; eligibleFemales: RadarPet[];
+  approaching: RadarPet[]; finalDuel: RadarPet[]; pathToBreeding: RadarPet[];
+  coverage: { hasEligibleMale: boolean; hasEligibleFemale: boolean; needSex: "male" | "female" | null };
+  counts: { eligible: number; approaching: number; final: number; total: number };
+}
 
 interface Outcome<T> { status: string; value?: T; note: string }
 interface Stats { start: number; speed: number; stamina: number; finish: number }
@@ -16,7 +23,7 @@ interface Preview {
   pending: string[];
   glue: { a: { deglueYield: number | null; reglueCost: number | null }; b: { deglueYield: number | null; reglueCost: number | null } };
 }
-interface Parent { petId: number; sex: string | null; rarity: string | null; generation: number | null; factionName: string | null; racesRun: number | null; duelsLeft: number | null }
+interface PreviewParent { petId: number; sex: string | null; rarity: string | null; generation: number | null; factionName: string | null; racesRun: number | null; duelsLeft: number | null }
 interface RarityDist { rarity: number; name: string; pct: number }
 interface Backtest { rarity: Acc; generation: Acc; gender: Acc; faction: Acc; statFloor: Acc }
 interface Acc { correct: number; n: number }
@@ -33,23 +40,26 @@ interface Modeled {
   valuation: Valuation & { burnedSource: string; gainedN: number };
   caveat: string;
 }
-interface PreviewResult { a: Parent; b: Parent; preview: Preview; modeled: Modeled | null }
+interface PreviewResult { a: PreviewParent; b: PreviewParent; preview: Preview; modeled: Modeled | null }
+
+interface PairParent { petId: number; name: string | null; rarity: string | null; cq: number; winRate: number | null; bestDistance: number; topTrait: string | null; elo: number | null; isFinal: boolean }
 interface Suggestion {
-  male: { petId: number; name: string | null; rarity: string | null };
-  female: { petId: number; name: string | null; rarity: string | null };
+  male: PairParent; female: PairParent;
   predictedRarity: { name: string; pct: number; n: number; basis: string };
-  distribution: RarityDist[];
-  upgradeChancePct: number;
-  generation: number | null;
-  statFloor: number | null;
+  distribution: RarityDist[]; distributionN: number; distributionBasis: string;
+  upgradeChancePct: number; climbObserved: { count: number; total: number } | null;
+  expectedRarity: number; reachStableMaxPct: number;
+  generation: number | null; statFloor: number | null;
+  faction: { inheritRatePct: number; n: number } | null;
   fallenPetId: number; keptPetId: number; offspringGender: string | null;
-  valuation: Valuation;
-  why: string;
+  forced: boolean; forcedNote: string | null; leavesKeptOnFinal: number | null;
+  valuation: Valuation; why: string;
 }
 interface BestPairings { goal: string; suggestions: Suggestion[]; modelN: number; note: string }
 
 const GIGA_DUEL_URL = "https://gigaverse.io/duel";
 const RARITY_ORDER = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Relic", "Giga"];
+const APPROACH_MIN = 25;
 
 const GOALS: { key: string; label: string }[] = [
   { key: "best", label: "Best expected offspring" },
@@ -57,6 +67,12 @@ const GOALS: { key: string; label: string }[] = [
   { key: "preserve", label: "Preserve a proven racer" },
   { key: "cheapest", label: "Cheapest viable" },
 ];
+const GOAL_METRIC: Record<string, string> = {
+  best: "Ranks by expected offspring rarity (probability-weighted mean of the model distribution), blended with the confirmed race quality of the parent you keep.",
+  rarity: "Ranks by expected offspring rarity (probability-weighted mean), then climb chance, then the chance to reach your best parent's tier. Any pairing with a climb chance outranks a same-floor pairing with none.",
+  preserve: "Ranks pairings that keep your best proven racer and sacrifice the weaker one; forced final-duel sacrifices of a weak racer rise to the top.",
+  cheapest: "Ranks by the lowest-value parent to sacrifice.",
+};
 
 const VERDICT: Record<Verdict, { label: string; color: string }> = {
   worth: { label: "Likely worth it", color: "var(--green)" },
@@ -65,21 +81,22 @@ const VERDICT: Record<Verdict, { label: string; color: string }> = {
   unknown: { label: "Directional only", color: "var(--ink-faint)" },
 };
 
+const isAddr = (a: string) => /^0x[0-9a-fA-F]{40}$/.test(a);
+
 function PetCard({ p, selected, onSelect }: { p: RadarPet; selected: boolean; onSelect: () => void }) {
-  const danger = p.duelsLeft === 1;
   return (
     <button
       type="button"
       onClick={onSelect}
       className="transition-paddock w-full rounded-lg border p-3 text-left hover:border-line-strong"
-      style={{ borderColor: selected ? "var(--gold)" : "var(--line)", background: selected ? "color-mix(in srgb, var(--gold) 8%, transparent)" : "transparent" }}
+      style={{ borderColor: selected ? "var(--gold)" : p.isFinal ? "var(--brick)" : "var(--line)", background: selected ? "color-mix(in srgb, var(--gold) 8%, transparent)" : "transparent" }}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="type-data truncate text-ink">{p.name ?? `#${p.petId}`}</span>
-        {danger && <span className="type-micro uppercase tracking-wider text-ink-faint">1 duel left</span>}
+        {p.isFinal && <span className="type-micro uppercase tracking-wider" style={{ color: "var(--brick)" }}>final duel</span>}
       </div>
       <div className="type-micro mt-1 normal-case text-ink-faint">
-        {p.rarity ?? "?"} · {p.racesRun} races · {p.duelsLeft != null ? `${p.duelsLeft} duels left` : "duels: max"}
+        {p.rarity ?? "?"}{p.topTrait ? ` ${p.topTrait}` : ""} · {p.racesRun} races · {p.duelsLeft != null ? `${p.duelsLeft} duels left` : "duels: max"}
       </div>
     </button>
   );
@@ -94,7 +111,63 @@ function Block({ label, tone, children }: { label: string; tone: string; childre
   );
 }
 
+function Skeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="space-y-2" aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="rounded-lg border hairline p-4" style={{ background: "var(--paper-raised)" }}>
+          <div className="assemble h-3 w-2/3 rounded" style={{ background: "var(--line)" }} />
+          <div className="assemble mt-2 h-3 w-1/2 rounded" style={{ background: "var(--line)", animationDelay: "80ms" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function climbText(s: Suggestion): string {
+  if (s.distributionBasis === "data" && s.climbObserved) return `${s.upgradeChancePct}% climbed (${s.climbObserved.count} of ${s.climbObserved.total} observed)`;
+  return `${s.upgradeChancePct}% climb (rule-based, thin data n=${s.distributionN})`;
+}
+
+function PairingDetail({ s }: { s: Suggestion }) {
+  const Parent = ({ p, label }: { p: PairParent; label: string }) => (
+    <div>
+      <p className="type-micro uppercase tracking-wider text-ink-faint">{label}: <Link href={`/pet/${p.petId}`} className="transition-paddock text-ink-soft hover:text-glow">#{p.petId}</Link> {p.rarity}{p.isFinal ? " · final duel" : ""}</p>
+      <p className="type-data mt-0.5 text-ink-soft">CQ {p.cq} · {p.winRate != null ? `${Math.round(p.winRate * 100)}% win` : "no races"} · best {p.bestDistance}m{p.topTrait ? ` · ${p.topTrait}` : ""}{p.elo != null ? ` · ELO ${Math.round(p.elo)}` : ""}</p>
+    </div>
+  );
+  return (
+    <div className="mt-3 space-y-3 border-t pt-3 hairline">
+      <div>
+        <p className="type-micro uppercase tracking-wider text-ink-faint">Offspring rarity distribution {s.distributionBasis === "data" ? `(from ${s.distributionN} similar duels)` : "(rule-based, thin data)"}</p>
+        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+          {s.distribution.map((d, i) => (
+            <span key={i} className="type-data text-ink-soft"><span style={{ color: "var(--gold)" }}>{d.name}</span> {d.pct}%</span>
+          ))}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-x-6 gap-y-1 type-data text-ink-soft">
+        <span>Stat floor {s.statFloor ?? "?"} to a ceiling of 100</span>
+        {s.faction && <span>Faction inherited {s.faction.inheritRatePct}% of the time (N={s.faction.n})</span>}
+        <span>Generation {s.generation ?? "?"}</span>
+      </div>
+      <p className="type-data text-ink-soft">
+        {s.forced ? s.forcedNote : `Who falls is your choice via Host Favour; we recommend sacrificing #${s.fallenPetId} so you keep the better racer. Duelborn gender = the fallen parent's (${s.offspringGender ?? "?"}).`}
+        {s.leavesKeptOnFinal != null && <span className="text-ink-faint"> This leaves #{s.leavesKeptOnFinal} on its final duel.</span>}
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Parent p={s.male} label="Male" />
+        <Parent p={s.female} label="Female" />
+      </div>
+    </div>
+  );
+}
+
 export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: number; modelN: number; accuracy: Backtest | null }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const connected = useWalletAddress();
+
   const [addr, setAddr] = useState("");
   const [scannedAddr, setScannedAddr] = useState("");
   const [radar, setRadar] = useState<Radar | null>(null);
@@ -108,30 +181,29 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
   const [errP, setErrP] = useState<string | null>(null);
 
   const [best, setBest] = useState<BestPairings | null>(null);
+  const [loadingB, setLoadingB] = useState(false);
   const [goal, setGoal] = useState("best");
+  const [expanded, setExpanded] = useState<number | null>(null);
 
-  async function scan(a: string) {
-    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) { setErrR("Paste a 0x wallet address."); return; }
-    setLoadingR(true); setErrR(null); setMale(null); setFemale(null); setPreview(null); setBest(null); setScannedAddr(a);
-    try {
-      const r = await fetch(`/api/v1/duel/radar?address=${a}`);
-      if (!r.ok) throw new Error((await r.json())?.error?.message ?? "Lookup failed.");
-      setRadar(await r.json());
-      loadBest(a, goal);
-    } catch (e) { setErrR(e instanceof Error ? e.message : "Lookup failed."); setRadar(null); }
-    finally { setLoadingR(false); }
-  }
+  const previewRef = useRef<HTMLDivElement | null>(null);
+  const didInit = useRef(false);
 
-  function loadBest(a: string, g: string) {
-    fetch(`/api/v1/duel/best-pairings?address=${a}&goal=${g}`).then((x) => x.ok ? x.json() : null).then((b) => setBest(b)).catch(() => setBest(null));
-  }
+  // Keep the URL as the single source of shareable state (wallet, goal, m, f). No localStorage.
+  const syncUrl = useCallback((next: { wallet?: string; goal?: string; m?: number | null; f?: number | null }) => {
+    const p = new URLSearchParams(searchParams.toString());
+    if (next.wallet !== undefined) { if (next.wallet) p.set("wallet", next.wallet); else p.delete("wallet"); }
+    if (next.goal !== undefined) p.set("goal", next.goal);
+    if (next.m !== undefined) { if (next.m) p.set("m", String(next.m)); else p.delete("m"); }
+    if (next.f !== undefined) { if (next.f) p.set("f", String(next.f)); else p.delete("f"); }
+    router.replace(`/duel?${p.toString()}`, { scroll: false });
+  }, [router, searchParams]);
 
-  function pickGoal(g: string) {
-    setGoal(g);
-    if (scannedAddr) loadBest(scannedAddr, g);
-  }
+  const loadBest = useCallback((a: string, g: string) => {
+    setLoadingB(true);
+    fetch(`/api/v1/duel/best-pairings?address=${a}&goal=${g}`).then((x) => x.ok ? x.json() : null).then((b) => setBest(b)).catch(() => setBest(null)).finally(() => setLoadingB(false));
+  }, []);
 
-  async function runPreview(a: number, b: number) {
+  const runPreview = useCallback(async (a: number, b: number) => {
     setLoadingP(true); setErrP(null);
     try {
       const r = await fetch(`/api/v1/duel/preview?a=${a}&b=${b}`);
@@ -139,14 +211,62 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
       setPreview(await r.json());
     } catch (e) { setErrP(e instanceof Error ? e.message : "Preview failed."); setPreview(null); }
     finally { setLoadingP(false); }
+  }, []);
+
+  const scan = useCallback(async (a: string, g: string) => {
+    if (!isAddr(a)) { setErrR("Paste a 0x wallet address."); return; }
+    setLoadingR(true); setErrR(null); setBest(null); setScannedAddr(a);
+    try {
+      const r = await fetch(`/api/v1/duel/radar?address=${a}`);
+      if (!r.ok) throw new Error((await r.json())?.error?.message ?? "Lookup failed.");
+      setRadar(await r.json());
+      loadBest(a, g);
+    } catch (e) { setErrR(e instanceof Error ? e.message : "Lookup failed."); setRadar(null); }
+    finally { setLoadingR(false); }
+  }, [loadBest]);
+
+  // D2: cold-load from URL params (validated; garbage degrades to the clean page, never an error).
+  useEffect(() => {
+    if (didInit.current) return;
+    didInit.current = true;
+    const w = searchParams.get("wallet") ?? "";
+    const g = searchParams.get("goal") ?? "best";
+    const m = Number(searchParams.get("m")) || null;
+    const f = Number(searchParams.get("f")) || null;
+    if (GOALS.some((x) => x.key === g)) setGoal(g);
+    if (m) setMale(m);
+    if (f) setFemale(f);
+    if (isAddr(w)) { setAddr(w); scan(w, GOALS.some((x) => x.key === g) ? g : "best"); }
+    if (m && f) runPreview(m, f);
+  }, [searchParams, scan, runPreview]);
+
+  function pickGoal(g: string) {
+    setGoal(g);
+    syncUrl({ goal: g });
+    if (scannedAddr) loadBest(scannedAddr, g);
   }
+
+  function onScanSubmit(a: string) {
+    setMale(null); setFemale(null); setPreview(null);
+    syncUrl({ wallet: a, goal, m: null, f: null });
+    scan(a, goal);
+  }
+
+  const selectPair = useCallback((m: number, f: number) => {
+    setMale(m); setFemale(f);
+    syncUrl({ m, f });
+    runPreview(m, f);
+    // D1: scroll the preview into view after it starts loading.
+    setTimeout(() => previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+  }, [runPreview, syncUrl]);
 
   function pick(sex: "male" | "female", id: number) {
     const nm = sex === "male" ? male : female;
     const next = nm === id ? null : id;
-    if (sex === "male") setMale(next); else setFemale(next);
     const m = sex === "male" ? next : male;
     const f = sex === "female" ? next : female;
+    if (sex === "male") setMale(next); else setFemale(next);
+    syncUrl({ m: sex === "male" ? next : male, f: sex === "female" ? next : female });
     if (m && f) runPreview(m, f); else setPreview(null);
   }
 
@@ -154,38 +274,52 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
 
   return (
     <div className="space-y-8">
-      {/* A. Scan box + explainer (pre-scan state is the clean explainer). */}
+      {/* A. Scan box. Pre-scan is the clean explainer. */}
       <div>
-        <form onSubmit={(e) => { e.preventDefault(); scan(addr.trim()); }} className="flex flex-wrap gap-2">
+        <form onSubmit={(e) => { e.preventDefault(); onScanSubmit(addr.trim()); }} className="flex flex-wrap gap-2">
           <input
             value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="Paste a wallet to rank its best pairings"
             className="type-data min-w-0 flex-1 rounded-md border hairline bg-transparent px-3.5 py-2.5 text-ink outline-none placeholder:text-ink-faint"
           />
           <button type="submit" className="transition-paddock rounded-md border hairline px-5 py-2.5 type-micro uppercase tracking-wider text-ink-soft hover:text-ink hover:border-line-strong">Scan stable</button>
-          <button type="button" onClick={() => { setAddr(DEMO_WALLET); scan(DEMO_WALLET); }} className="transition-paddock rounded-md px-3 py-2.5 type-micro uppercase tracking-wider text-ink-faint hover:text-ink">Demo</button>
+          {connected && isAddr(connected) && (
+            <button type="button" onClick={() => { setAddr(connected); onScanSubmit(connected); }} className="transition-paddock rounded-md border px-4 py-2.5 type-micro uppercase tracking-wider" style={{ borderColor: "var(--gold)", color: "var(--gold)" }}>Scan my stable</button>
+          )}
+          <button type="button" onClick={() => { setAddr(DEMO_WALLET); onScanSubmit(DEMO_WALLET); }} className="transition-paddock rounded-md px-3 py-2.5 type-micro uppercase tracking-wider text-ink-faint hover:text-ink">Demo</button>
         </form>
         {errR && <p className="type-micro mt-2 normal-case" style={{ color: "var(--brick)" }}>{errR}</p>}
-        {loadingR && <p className="type-data mt-3 text-ink-faint">Reading the stable...</p>}
+        {loadingR && <div className="mt-4"><Skeleton rows={2} /></div>}
 
-        {radar && (
+        {radar && !loadingR && (
           <div className="mt-4 flex flex-wrap gap-4">
             <span className="type-micro uppercase tracking-wider" style={{ color: "var(--gold)" }}>{radar.counts.eligible} ready to breed</span>
-            {radar.counts.danger > 0 && <span className="type-micro uppercase tracking-wider text-ink-faint">{radar.counts.danger} on their last duel</span>}
+            {radar.counts.final > 0 && <span className="type-micro uppercase tracking-wider" style={{ color: "var(--brick)" }}>{radar.counts.final} on a final duel</span>}
             <span className="type-micro uppercase tracking-wider text-ink-faint">{radar.counts.approaching} approaching · {radar.counts.total} Giglings</span>
           </div>
         )}
       </div>
 
-      {/* B. HERO after a scan: the ranked recommender. */}
-      {radar && (
+      {/* B. Path to breeding: the empty state becomes a development plan. Full when 0 ready. */}
+      {radar && !loadingR && radar.pathToBreeding.length > 0 && (
+        radar.counts.eligible === 0 ? (
+          <PathPanel radar={radar} collapsed={false} />
+        ) : (
+          <details className="rounded-lg border hairline" style={{ background: "var(--paper-raised)" }}>
+            <summary className="cursor-pointer px-4 py-3 type-micro uppercase tracking-wider text-ink-soft">Path to breeding: {radar.pathToBreeding.length} more Giglings developing</summary>
+            <div className="px-4 pb-4"><PathPanel radar={radar} collapsed /></div>
+          </details>
+        )
+      )}
+
+      {/* C. HERO after a scan: the ranked recommender. */}
+      {radar && !loadingR && (
         <div>
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="type-section text-ink">Best pairings for this stable</h2>
             {best && <p className="type-micro normal-case text-ink-faint">{best.note}</p>}
           </div>
 
-          {/* Goal selector */}
-          <div className="mb-4 flex flex-wrap gap-2">
+          <div className="mb-2 flex flex-wrap gap-2">
             {GOALS.map((g) => (
               <button key={g.key} type="button" onClick={() => pickGoal(g.key)}
                 className="transition-paddock rounded-full border px-3 py-1 type-micro uppercase tracking-wider"
@@ -194,23 +328,25 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
               </button>
             ))}
           </div>
+          <p className="type-micro mb-4 normal-case text-ink-faint">{GOAL_METRIC[goal]}</p>
 
           {radar.counts.eligible === 0 ? (
-            <p className="type-data text-ink-faint">No Giglings with {minRaces}+ races and a free duel in this stable yet. A pairing needs one eligible male and one eligible female.</p>
-          ) : !best ? (
-            <p className="type-data text-ink-faint">Ranking pairings...</p>
-          ) : best.suggestions.length === 0 ? (
-            <p className="type-data text-ink-faint">No viable male + female pairing in this stable (a duel needs one of each, both with an unspent duel).</p>
+            <p className="type-data text-ink-faint">No Giglings with {minRaces}+ races and a free duel yet. Develop the horses above, then come back; Paddock ranks the pairings when they qualify.</p>
+          ) : loadingB ? (
+            <Skeleton rows={4} />
+          ) : !best || best.suggestions.length === 0 ? (
+            <p className="type-data text-ink-faint">No viable male + female pairing in this stable (a duel needs one of each; two final-duel pets cannot meet).</p>
           ) : (
             <div className="space-y-2">
               {best.suggestions.slice(0, 6).map((s, i) => {
                 const v = VERDICT[s.valuation.verdict];
+                const isOpen = expanded === i;
                 return (
                   <div key={i} className="rounded-lg border hairline p-4" style={{ background: "var(--paper-raised)" }}>
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
                       <div className="flex items-baseline gap-2">
                         <span className="type-data tabular-nums text-ink-faint">{i + 1}</span>
-                        <button type="button" onClick={() => { setMale(s.male.petId); setFemale(s.female.petId); runPreview(s.male.petId, s.female.petId); }}
+                        <button type="button" onClick={() => selectPair(s.male.petId, s.female.petId)}
                           className="transition-paddock type-data text-left text-ink hover:text-glow">
                           #{s.male.petId} {s.male.rarity ?? ""} <span className="text-ink-faint">x</span> #{s.female.petId} {s.female.rarity ?? ""}
                         </button>
@@ -221,17 +357,24 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
                       <span>Duelborn <span style={{ color: "var(--gold)" }}>{s.predictedRarity.name} {s.predictedRarity.pct}%</span>{s.predictedRarity.basis !== "data" ? " (rule)" : ""}</span>
                       <span>gen {s.generation ?? "?"}</span>
                       {s.statFloor != null && <span>floor {s.statFloor}</span>}
-                      <span className={s.upgradeChancePct > 0 ? "" : "text-ink-faint"} style={s.upgradeChancePct > 0 ? { color: "var(--gold)" } : undefined}>{s.upgradeChancePct > 0 ? `${s.upgradeChancePct}% upgrade` : "holds tier"}</span>
-                      <span>sacrifice <span style={{ color: "var(--brick)" }}>#{s.fallenPetId}</span> ({s.offspringGender ?? "?"} Duelborn)</span>
+                      <span className={s.upgradeChancePct > 0 ? "" : "text-ink-faint"} style={s.upgradeChancePct > 0 ? { color: "var(--gold)" } : undefined}>{climbText(s)}</span>
+                      {s.forced
+                        ? <span style={{ color: "var(--brick)" }}>FORCED: #{s.fallenPetId} falls</span>
+                        : <span>sacrifice <span style={{ color: "var(--brick)" }}>#{s.fallenPetId}</span> ({s.offspringGender ?? "?"} Duelborn)</span>}
                     </div>
-                    <p className="type-micro mt-1.5 normal-case text-ink-faint">{s.why} {s.valuation.note}</p>
+                    <p className="type-micro mt-1.5 normal-case text-ink-faint">{s.why} {s.valuation.note}{s.leavesKeptOnFinal != null ? ` This leaves #${s.leavesKeptOnFinal} on its final duel.` : ""}</p>
+                    <div className="mt-2 flex flex-wrap gap-3">
+                      <button type="button" onClick={() => selectPair(s.male.petId, s.female.petId)} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-glow">Load in preview</button>
+                      <button type="button" onClick={() => setExpanded(isOpen ? null : i)} className="type-micro uppercase tracking-wider text-ink-faint transition-paddock hover:text-glow">{isOpen ? "Hide detail" : "Show detail"}</button>
+                    </div>
+                    {isOpen && <PairingDetail s={s} />}
                   </div>
                 );
               })}
             </div>
           )}
 
-          {/* Eligible pools, for a manual pick if the ranked list is not what you want. */}
+          {/* Eligible pools, for a manual pick. Final-duel pets are tagged. */}
           {radar.counts.eligible > 0 && (
             <div className="mt-6 grid gap-5 md:grid-cols-2">
               <div>
@@ -245,7 +388,7 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
                 <p className="eyebrow mb-2">Eligible females ({radar.eligibleFemales.length}) {female ? `· #${female} selected` : ""}</p>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {radar.eligibleFemales.slice(0, 12).map((pt) => <PetCard key={pt.petId} p={pt} selected={female === pt.petId} onSelect={() => pick("female", pt.petId)} />)}
-                  {radar.eligibleFemales.length === 0 && <p className="type-data text-ink-faint">None eligible.</p>}
+                  {radar.eligibleFemales.length === 0 && <p className="type-data text-ink-faint">None eligible. {radar.coverage.needSex === "female" ? "You will also need an eligible female." : ""}</p>}
                 </div>
               </div>
             </div>
@@ -253,23 +396,23 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
         </div>
       )}
 
-      {/* C. Manual breeding preview. */}
-      <div className="rounded-2xl border hairline p-5 md:p-6" style={{ background: "var(--paper-raised)" }}>
+      {/* D. Manual breeding preview. */}
+      <div ref={previewRef} className="rounded-2xl border hairline p-5 md:p-6" style={{ background: "var(--paper-raised)" }}>
         <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="type-section text-ink">Breeding preview</h2>
           <div className="flex flex-wrap gap-2">
-            <input value={male ?? ""} onChange={(e) => { const v = Number(e.target.value) || null; setMale(v); if (v && female) runPreview(v, female); }} placeholder="Male id" inputMode="numeric"
+            <input value={male ?? ""} onChange={(e) => { const v = Number(e.target.value) || null; setMale(v); syncUrl({ m: v }); if (v && female) runPreview(v, female); }} placeholder="Male id" inputMode="numeric"
               className="type-data w-28 rounded-md border hairline bg-transparent px-3 py-1.5 text-ink outline-none placeholder:text-ink-faint" />
-            <input value={female ?? ""} onChange={(e) => { const v = Number(e.target.value) || null; setFemale(v); if (v && male) runPreview(male, v); }} placeholder="Female id" inputMode="numeric"
+            <input value={female ?? ""} onChange={(e) => { const v = Number(e.target.value) || null; setFemale(v); syncUrl({ f: v }); if (v && male) runPreview(male, v); }} placeholder="Female id" inputMode="numeric"
               className="type-data w-28 rounded-md border hairline bg-transparent px-3 py-1.5 text-ink outline-none placeholder:text-ink-faint" />
           </div>
         </div>
 
         {!preview && !loadingP && <p className="type-data text-ink-faint">Pick a ranked pairing above, one eligible male and one female, or type two ids, to preview the Duelborn.</p>}
-        {loadingP && <p className="type-data text-ink-faint">Reading the pairing...</p>}
+        {loadingP && <Skeleton rows={3} />}
         {errP && <p className="type-micro normal-case" style={{ color: "var(--brick)" }}>{errP}</p>}
 
-        {preview && p && (
+        {preview && p && !loadingP && (
           <div className="space-y-4">
             <div className="flex flex-wrap gap-x-8 gap-y-1">
               {[preview.a, preview.b].map((par) => (
@@ -285,7 +428,6 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
               </Block>
             )}
 
-            {/* WHO FALLS: a choice via Host Favour, not a forced outcome. */}
             <Block label="Who falls" tone="var(--brick)">
               <p className="type-data text-ink-soft">
                 You choose who falls via Host Favour: set it to max to sacrifice the challenger, to min to sacrifice the host. The parent that falls is permanently destroyed and becomes the Duelborn.
@@ -293,7 +435,6 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
               </p>
             </Block>
 
-            {/* WHAT YOU GET: the deterministic facts. */}
             <Block label="What you get" tone="var(--green)">
               <p className="type-data text-ink">
                 Duelborn generation <span style={{ color: "var(--gold)" }}>{p.certain.generation ?? "?"}</span>
@@ -303,15 +444,9 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
               {preview.modeled?.statFloor.floor != null && (
                 <p className="type-data mt-1 text-ink">Stat floor <span style={{ color: "var(--gold)" }}>{preview.modeled.statFloor.floor}</span> <span className="text-ink-soft">to a ceiling of 100 (set by the offspring rarity; actual values narrow as the Duelborn races)</span></p>
               )}
-              {p.odds.expectedStats.value && (
-                <p className="type-data mt-1 text-ink-soft">
-                  Parent midpoint (a rough center, not a prediction): S {p.odds.expectedStats.value.start} · Sp {p.odds.expectedStats.value.speed} · St {p.odds.expectedStats.value.stamina} · F {p.odds.expectedStats.value.finish}
-                </p>
-              )}
               <p className="type-data mt-1 text-ink-soft">Faction: {p.odds.faction.note}</p>
             </Block>
 
-            {/* MODELED ODDS (empirical, with N). */}
             {preview.modeled && (
               <Block label={`Modeled odds, from ${preview.modeled.modelN} real duels`} tone="var(--cyan)">
                 <p className="type-data text-ink">
@@ -330,7 +465,6 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
               </Block>
             )}
 
-            {/* IS IT WORTH IT (valuation verdict). */}
             {preview.modeled && (
               <Block label="Is it worth it" tone={VERDICT[preview.modeled.valuation.verdict].color}>
                 <p className="type-data text-ink">
@@ -346,7 +480,6 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
               </Block>
             )}
 
-            {/* Backtested accuracy: proof the modeled numbers hold up against the set. */}
             {accuracy && (
               <Block label="Model accuracy (backtested on the resolved set)" tone="var(--ink-faint)">
                 <p className="type-data text-ink-soft">
@@ -356,7 +489,6 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
               </Block>
             )}
 
-            {/* CTA: link only, never sign. */}
             <Link href={GIGA_DUEL_URL} target="_blank" rel="noopener noreferrer"
               className="transition-paddock inline-block rounded-md border px-5 py-2.5 type-micro uppercase tracking-wider hover:bg-paper-sunken"
               style={{ borderColor: "var(--gold)", color: "var(--gold)" }}>
@@ -366,6 +498,34 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function PathPanel({ radar, collapsed }: { radar: Radar; collapsed: boolean }) {
+  return (
+    <div className={collapsed ? "" : "rounded-lg border p-5"} style={collapsed ? undefined : { borderColor: "var(--cyan)", background: "color-mix(in srgb, var(--cyan) 6%, transparent)" }}>
+      {!collapsed && <p className="type-card-title text-ink">Path to breeding</p>}
+      {!collapsed && (
+        <p className="type-body mt-1 text-ink-soft">
+          No Giglings qualify yet ({40} races and an unspent duel are needed). Here are the closest, ranked by races remaining then confirmed quality, so you develop the horses that will matter.
+        </p>
+      )}
+      <ul className="mt-3 space-y-1.5">
+        {radar.pathToBreeding.map((pt) => (
+          <li key={pt.petId} className="flex flex-wrap items-baseline justify-between gap-2">
+            <Link href={`/pet/${pt.petId}`} className="type-data text-ink transition-paddock hover:text-glow">
+              #{pt.petId} <span className="text-ink-soft">{pt.rarity ?? "?"}{pt.topTrait ? ` ${pt.topTrait}` : ""} ({pt.sex ? pt.sex[0].toUpperCase() : "?"})</span>
+            </Link>
+            <span className="type-data tabular-nums text-ink-soft">{pt.racesRun} of 40 races <span className="text-ink-faint">· {pt.racesToGo} to go</span></span>
+          </li>
+        ))}
+      </ul>
+      <p className="type-micro mt-3 normal-case text-ink-faint">
+        Approaching means {APPROACH_MIN}+ of 40 races. Ordered by races remaining, then confirmed quality.
+        {radar.coverage.needSex ? ` You will also need an eligible ${radar.coverage.needSex}, since a pairing needs one of each.` : ""}
+        {" "}Develop them in free races, then come back; Paddock ranks the pairings when they qualify.
+      </p>
     </div>
   );
 }

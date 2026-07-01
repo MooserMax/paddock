@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { getDuelGlobalStats, getDuelTraining } from "@/lib/api/queries";
 import { fetchDuelConfig } from "@/lib/duel";
 import { formatInt, formatEth } from "@/lib/format";
@@ -47,8 +48,11 @@ export default async function DuelPage() {
         </p>
       </header>
 
-      {/* Scan -> ranked recommender (hero after a scan) -> manual preview. */}
-      <DuelStudio minRaces={config?.minRacesToDuel ?? 40} modelN={training?.n ?? 0} accuracy={training?.accuracy ?? null} />
+      {/* Scan -> ranked recommender (hero after a scan) -> manual preview. Wrapped in Suspense
+          because it reads URL params (deep links) via useSearchParams. */}
+      <Suspense fallback={<div className="type-data text-ink-faint">Loading the breeding studio...</div>}>
+        <DuelStudio minRaces={config?.minRacesToDuel ?? 40} modelN={training?.n ?? 0} accuracy={training?.accuracy ?? null} />
+      </Suspense>
 
       {/* Breeder-relevant stat tiles, on-chain-derived, plus the model-accuracy proof tile. */}
       {stats && (

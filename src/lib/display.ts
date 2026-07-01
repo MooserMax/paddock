@@ -10,6 +10,7 @@ export const RARITY_DISPLAY: Record<number, { name: string; color: string }> = {
   4: { name: "Legendary", color: "var(--cyan)" },
   3: { name: "Epic", color: "var(--green)" },
   2: { name: "Rare", color: "var(--ink-soft)" },
+  1: { name: "Uncommon", color: "var(--ink-faint)" },
   0: { name: "Unknown", color: "var(--ink-faint)" },
 };
 
