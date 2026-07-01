@@ -31,11 +31,13 @@ interface Suggestion {
   male: { petId: number; name: string | null; rarity: string | null };
   female: { petId: number; name: string | null; rarity: string | null };
   predictedRarity: { name: string; pct: number; n: number; basis: string };
+  upgradeChancePct: number;
   netEth: number | null;
 }
 interface BestPairings { suggestions: Suggestion[]; modelN: number; note: string }
 
 const GIGA_DUEL_URL = "https://gigaverse.io/duel";
+const RARITY_ORDER = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Relic", "Giga"];
 
 function PetCard({ p, selected, onSelect }: { p: RadarPet; selected: boolean; onSelect: () => void }) {
   const danger = p.duelsLeft === 1;
@@ -180,7 +182,7 @@ export default function DuelStudio({ minRaces }: { minRaces: number }) {
                 <span className="type-data w-6 tabular-nums text-ink-faint">{i + 1}</span>
                 <span className="type-data flex-1 truncate text-ink">#{s.male.petId} {s.male.rarity ?? ""} <span className="text-ink-faint">x</span> #{s.female.petId} {s.female.rarity ?? ""}</span>
                 <span className="type-data text-ink-soft">{s.predictedRarity.name} {s.predictedRarity.pct}%</span>
-                {s.netEth != null && <span className="type-data w-24 text-right tabular-nums" style={{ color: s.netEth >= 0 ? "var(--green)" : "var(--brick)" }}>{s.netEth >= 0 ? "+" : ""}{s.netEth} ETH</span>}
+                <span className="type-data w-28 text-right tabular-nums" style={{ color: s.upgradeChancePct > 0 ? "var(--gold)" : "var(--ink-faint)" }}>{s.upgradeChancePct > 0 ? `${s.upgradeChancePct}% upgrade` : "holds tier"}</span>
               </button>
             ))}
           </div>
@@ -271,18 +273,24 @@ export default function DuelStudio({ minRaces }: { minRaces: number }) {
 
             {/* IS IT WORTH IT (valuation) */}
             <Block label="Is it worth it" tone="var(--gold)">
-              {preview.modeled?.valuation.netEth != null ? (
+              {preview.modeled ? (
                 <>
                   <p className="type-data text-ink">
-                    Expected net value: <span style={{ color: preview.modeled.valuation.netEth >= 0 ? "var(--green)" : "var(--brick)" }}>{preview.modeled.valuation.netEth >= 0 ? "+" : ""}{preview.modeled.valuation.netEth} ETH</span>
+                    You permanently burn one proven racer to mint a{" "}
+                    <span style={{ color: "var(--gold)" }}>{preview.modeled.rarity.distribution[0]?.name} ({preview.modeled.rarity.distribution[0]?.pct}%)</span> Duelborn, gen {p.certain.generation ?? "?"} with a flat +{p.certain.generationBonus ?? "?"} Start/Speed/Finish boost.
                   </p>
+                  {(() => {
+                    const lo = Math.min(...[preview.a.rarity, preview.b.rarity].map((r) => RARITY_ORDER.indexOf(r ?? "")));
+                    const up = preview.modeled.rarity.distribution.filter((d) => d.rarity > lo).reduce((s, d) => s + d.pct, 0);
+                    return <p className="type-data mt-1 text-ink-soft">Rarity-upgrade chance: <span style={{ color: up > 0 ? "var(--gold)" : "var(--ink-faint)" }}>{up}%</span> (else it holds the lower parent's tier).</p>;
+                  })()}
                   <p className="type-micro mt-1 normal-case text-ink-faint">
-                    burn ~{preview.modeled.valuation.burnedEth} ETH ({preview.modeled.valuation.burnedSource}) to mint a Duelborn worth ~{preview.modeled.valuation.gainedEth} ETH (typical sale of the predicted rarity, N={preview.modeled.valuation.gainedN}) + a gen {p.certain.generation ?? "?"} +{p.certain.generationBonus ?? "?"} race boost. {preview.modeled.valuation.note}
+                    ETH net-value estimate is weak right now: per-rarity Gigling sale medians in our data are flat (~{preview.modeled.valuation.gainedEth} ETH across tiers, N={preview.modeled.valuation.gainedN}), so the real signal is the rarity-upgrade chance and the generation boost, not a dollar figure.
                   </p>
                 </>
               ) : (
                 <p className="type-data text-ink-soft">
-                  You permanently burn one proven racer (glue yield {doomedParent ? (doomedParent.petId === preview.a.petId ? p.glue.a.deglueYield : p.glue.b.deglueYield) : `${p.glue.a.deglueYield}/${p.glue.b.deglueYield}`}) to mint a gen {p.certain.generation ?? "?"} Duelborn. Not enough rarity-tier sales to value it yet; valuation pending.
+                  You permanently burn one proven racer (glue yield {doomedParent ? (doomedParent.petId === preview.a.petId ? p.glue.a.deglueYield : p.glue.b.deglueYield) : `${p.glue.a.deglueYield}/${p.glue.b.deglueYield}`}) to mint a gen {p.certain.generation ?? "?"} Duelborn. Valuation model warming up.
                 </p>
               )}
             </Block>

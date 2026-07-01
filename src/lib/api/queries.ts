@@ -2023,17 +2023,18 @@ export interface PairingSuggestion {
   male: { petId: number; name: string | null; rarity: string | null };
   female: { petId: number; name: string | null; rarity: string | null };
   predictedRarity: { name: string; pct: number; n: number; basis: string };
+  upgradeChancePct: number; // P(offspring rarity > the lower parent rarity)
   netEth: number | null;
-  generation: number | null;
-  score: number; // ranking score (expected net value, falling back to predicted rarity index)
+  score: number;
 }
 
 export interface BestPairings { address: string; goal: string; suggestions: PairingSuggestion[]; modelN: number; note: string }
 
-// Rank viable male+female pairings in a stable by predicted outcome / expected net value. Goal:
-// "value" (default, rank by expected net ETH), "rarity" (rank by most-likely offspring rarity).
-// Read from indexed data + the fitted model; no per-pet live calls.
-export async function getBestPairings(address: string, goal: "value" | "rarity" = "value"): Promise<BestPairings> {
+// Rank viable male+female pairings by the real breeding signal: the chance of a rarity UPGRADE
+// (offspring climbs above the lower parent) plus the most-likely tier, from the fitted model. Net
+// ETH is included but the sales table's per-rarity medians are currently flat, so it is a weak
+// signal and not the primary sort. Read from indexed data + model; no per-pet live calls.
+export async function getBestPairings(address: string, goal: "value" | "rarity" = "rarity"): Promise<BestPairings> {
   const radar = await getDuelRadar(address);
   const model = await loadDuelModel();
   const males = radar.eligibleMales, females = radar.eligibleFemales;
@@ -2044,17 +2045,19 @@ export async function getBestPairings(address: string, goal: "value" | "rarity" 
     for (const f of females) {
       const ra = idxOf(m.rarity), rb = idxOf(f.rarity);
       if (ra < 0 || rb < 0) continue;
+      const lo = Math.min(ra, rb);
       const pred = predictRarity(model, ra, rb);
-      const gain = rarityValue(model, pred.mostLikely);
-      const burn = rarityValue(model, Math.min(ra, rb));
+      const upgradeChancePct = pred.distribution.filter((d) => d.rarity > lo).reduce((s, d) => s + d.pct, 0);
+      const gain = rarityValue(model, pred.mostLikely), burn = rarityValue(model, lo);
       const netEth = gain.medianEth != null && burn.medianEth != null ? Math.round((gain.medianEth - burn.medianEth) * 10000) / 10000 : null;
       const top = pred.distribution[0];
-      const score = goal === "rarity" ? pred.mostLikely * 100 + (top?.pct ?? 0) : (netEth ?? -999);
+      // Rank by most-likely tier, then upgrade chance (both from the strong rarity model).
+      const score = pred.mostLikely * 1000 + upgradeChancePct;
       suggestions.push({
         male: { petId: m.petId, name: m.name, rarity: m.rarity },
         female: { petId: f.petId, name: f.name, rarity: f.rarity },
         predictedRarity: { name: top?.name ?? "?", pct: top?.pct ?? 0, n: pred.n, basis: pred.basis },
-        netEth, generation: null, score,
+        upgradeChancePct, netEth, score,
       });
     }
   }
@@ -2063,7 +2066,7 @@ export async function getBestPairings(address: string, goal: "value" | "rarity" 
     address: address.toLowerCase(), goal,
     suggestions: suggestions.slice(0, 12),
     modelN: model?.n ?? 0,
-    note: model ? `Ranked from ${model.n} real duels. Net value is a rarity-floor estimate, not a guarantee.` : "Model not fit yet.",
+    note: model ? `Ranked by predicted Duelborn rarity and upgrade chance, from ${model.n} real duels.` : "Model not fit yet.",
   };
 }
 
