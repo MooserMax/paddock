@@ -4,7 +4,9 @@ import PetPortrait from "@/components/PetPortrait";
 import type { Metadata } from "next";
 import { api } from "@/lib/api/client";
 import { ApiClientError } from "@/lib/api/client";
+import { getLineage } from "@/lib/api/queries";
 import type { PetDossier } from "@/lib/api/types";
+import BloodlineBand from "@/components/dossier/BloodlineBand";
 import StatRangeBar from "@/components/StatRangeBar";
 import RarityBadge from "@/components/RarityBadge";
 import Panel from "@/components/ui/Panel";
@@ -52,6 +54,10 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
 
   const neverRaced = d.neverRaced;
   const born = d.duelborn;
+  // Bloodline band: only fetch/render when there is something to show, a Duelborn (has ancestry) or
+  // a founder (has offspring). A plain genesis racer with neither shows no band.
+  const lineage = d.limited ? null : await getLineage(d.id);
+  const showBloodline = !!lineage && (!lineage.isGenesis || lineage.counts.directOffspring > 0);
   const statKeys = ["start", "speed", "stamina", "finish"] as const;
   const statLows = statKeys.map((k) => d.stats[k].low).filter((x): x is number => x != null);
   const statFloor = statLows.length ? Math.min(...statLows) : 0;
@@ -111,26 +117,7 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
         </div>
       )}
 
-      {/* Parentage, for any Duelborn. Both parents link out; the fallen one is marked. */}
-      {born && (
-        <div className="assemble mt-6 rounded-lg border hairline p-4" style={{ background: "var(--paper-raised)", animationDelay: "40ms" }}>
-          <p className="eyebrow mb-2">Parentage</p>
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
-            {born.parents.map((pid) => {
-              const fell = pid === born.fallenParentId;
-              return (
-                <span key={pid} className="type-data">
-                  <Link href={`/pet/${pid}`} className="transition-paddock text-ink hover:text-glow">#{pid}</Link>{" "}
-                  <span className="type-micro uppercase tracking-wider" style={{ color: fell ? "var(--brick)" : "var(--green)" }}>
-                    {fell ? "fell (destroyed)" : "survived"}
-                  </span>
-                </span>
-              );
-            })}
-            <span className="type-micro normal-case text-ink-faint">Gender is inherited from the parent that fell.</span>
-          </div>
-        </div>
-      )}
+      {/* Full parentage + line analytics live in the Bloodline band below the stats. */}
 
       {/* Headline scores: shown only for a horse that has actually raced. A never-raced Gigling has
           no win rate, no confirmed quality, and no proven best distance, so we do not print a
@@ -263,6 +250,9 @@ export default async function PetPage(props: { params: Promise<{ id: string }> }
           </Panel>
         </div>
       </div>
+
+      {/* Surface 1: Bloodline band, below the stats where the eye already travels. */}
+      {showBloodline && lineage && <BloodlineBand lineage={lineage} focalName={d.name ?? `#${d.id}`} />}
 
       {/* Racing records: best time per distance, with record-holder badges */}
       {d.records.length > 0 && (

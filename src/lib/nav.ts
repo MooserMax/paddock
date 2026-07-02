@@ -20,11 +20,12 @@ const DUEL: NavRoute = { href: "/duel", label: "Duel", ready: true };
 const SCANNER: NavRoute = { href: "/scanner", label: "Scanner", ready: true };
 const LEADERBOARDS: NavRoute = { href: "/leaderboards", label: "Leaderboards", ready: true };
 const RECORDS: NavRoute = { href: "/records", label: "Records", ready: true };
+const FOUNDERS: NavRoute = { href: "/founders", label: "Founders", ready: true };
 
 // Flat list of every primary destination. The footer and the e2e link check derive from this,
 // so it stays complete; grouping into dropdowns is a presentation concern only (no route
 // added or removed, no URL changed).
-export const NAV_ROUTES: NavRoute[] = [WALLET, RACES, RACE_FINDER, DEVELOP, DUEL, SCANNER, LEADERBOARDS, RECORDS];
+export const NAV_ROUTES: NavRoute[] = [WALLET, RACES, RACE_FINDER, DEVELOP, DUEL, SCANNER, LEADERBOARDS, RECORDS, FOUNDERS];
 
 // The top bar is consolidated into two dropdowns plus the direct Wallet link: nothing is
 // removed, only grouped. Races = what you do with a race (incl. breeding via Duel); Intel = the
@@ -32,7 +33,7 @@ export const NAV_ROUTES: NavRoute[] = [WALLET, RACES, RACE_FINDER, DEVELOP, DUEL
 export interface NavGroup { label: string; routes: NavRoute[] }
 export const NAV_GROUPS: NavGroup[] = [
   { label: "Races", routes: [RACES, RACE_FINDER, DEVELOP, DUEL] },
-  { label: "Intel", routes: [SCANNER, LEADERBOARDS, RECORDS] },
+  { label: "Intel", routes: [SCANNER, LEADERBOARDS, RECORDS, FOUNDERS] },
 ];
 export const WALLET_ROUTE: NavRoute = WALLET;
 

@@ -109,6 +109,57 @@ export interface DuelbornRef {
   survivorParentId: number | null;
 }
 
+// ---- Bloodline Intelligence (lineage as an analytic lens) ----------------------------------
+export interface LineageNode {
+  id: number;
+  name: string | null;
+  rarity: RarityRef;
+  faction: string | null;
+  generation: number;
+  sex: "male" | "female" | null;
+  topTrait: string | null;
+  imgUrl: string | null;
+  role?: "fell" | "survived"; // this node's role in the duel that links it to the focal pet
+  depth?: number;             // steps from the focal pet (ancestors and descendants)
+}
+
+// The three bloodline analytics computed over a line's descendant set.
+export interface BloodlineAnalytics {
+  climb: { observed: number; total: number; expectedPct: number }; // realized rarity-climb vs official expectation
+  trait: { dominant: string | null; count: number; revealed: number; note: string }; // trait concentration
+  value: { lowEth: number | null; highEth: number | null; n: number; thin: boolean }; // estimated bloodline value
+}
+
+export interface Lineage {
+  focal: LineageNode;
+  isGenesis: boolean;
+  ancestors: LineageNode[];   // direct parents first (empty for genesis)
+  offspring: LineageNode[];   // direct offspring, each with the focal's fell/survived role in that duel
+  descendants: LineageNode[]; // full descendant set (recursive, deduped), with depth + generation
+  analytics: BloodlineAnalytics;
+  counts: { totalDescendants: number; generationsSpanned: number; directOffspring: number };
+}
+
+export interface FounderRow {
+  id: number;
+  name: string | null;
+  ownerAddress: string | null;
+  ownerName: string | null;
+  rarity: RarityRef;
+  faction: string | null;
+  sex: "male" | "female" | null;
+  topTrait: string | null;
+  imgUrl: string | null;
+  directOffspring: number;
+  generationsSpanned: number;
+  climb: { observed: number; total: number; expectedPct: number };
+  dominantTrait: string | null;
+  value: { lowEth: number | null; highEth: number | null; n: number; thin: boolean };
+  score: number;                 // Founder Score (transparent blend)
+  scoreParts: { offspring: number; climb: number; concentration: number }; // auditable components
+}
+export interface FoundersResponse { rows: FounderRow[]; total: number; sort: string; scoreExplainer: string }
+
 // One real comparable sale, from the marketplace sales pool. Never fabricated.
 export interface SaleCompDTO {
   tokenId: number;

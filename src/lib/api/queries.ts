@@ -21,6 +21,11 @@ import type {
   LeaderboardRow,
   RarityRef,
   DuelbornRef,
+  LineageNode,
+  BloodlineAnalytics,
+  Lineage,
+  FounderRow,
+  FoundersResponse,
 } from "./types";
 
 const SOURCE = "paddock-db";
@@ -1998,7 +2003,7 @@ export async function getJuiceRevenue(): Promise<JuiceRevenueHome | null> {
 // ---- Duel: parent lookup + deterministic preview (read-only) -------------------------------
 import { breedingPreview, duelbornGeneration, RARITY_TIERS, type ParentInput, type BreedingPreview, type Rarity } from "../duelRules";
 import { predictRarity, rarityValue, statFloorFor, type DuelModel, type RarityPrediction, type DuelTraining, type DuelTrainingRow, DUEL_TRAINING_KEY } from "../ingest/duelModel";
-import { officialClimbPct, officialTraitTierOdds, glueFor } from "../duelOdds";
+import { officialClimbPct, officialTraitTierOdds, glueFor, expectedRateAcross } from "../duelOdds";
 
 async function loadDuelModel(): Promise<DuelModel | null> {
   const { data } = await db().from("sync_state").select("value").eq("key", "duel_model_v1").maybeSingle();
@@ -2557,4 +2562,250 @@ export async function getDuelRadar(address: string): Promise<DuelRadar> {
     coverage: { hasEligibleMale, hasEligibleFemale, needSex },
     counts: { eligible: eligible.length, approaching: base.filter((r) => r.status === "approaching").length, final: eligible.filter((r) => r.isFinal).length, total: base.length },
   };
+}
+
+// ---- Bloodline Intelligence (Part: lineage as an analytic lens) ----------------------------
+// The lineage graph is derived entirely from the resolved-duel training rows (each row = one duel:
+// offspring with parents [host, challenger], and who fell). No parent columns live in the pets
+// table; the training set IS the graph. Node metadata (name, faction, art, value, trait) is joined
+// from pets/pet_scores/pet_traits. Read-only; official odds provide the climb expectation.
+
+interface LineageMaps {
+  byOffspring: Map<number, DuelTrainingRow>;      // offspringPetId -> the duel that produced it
+  byParent: Map<number, DuelTrainingRow[]>;       // parentPetId -> duels it was a parent in
+  rows: DuelTrainingRow[];
+}
+function lineageMaps(rows: DuelTrainingRow[]): LineageMaps {
+  const byOffspring = new Map<number, DuelTrainingRow>();
+  const byParent = new Map<number, DuelTrainingRow[]>();
+  for (const r of rows) {
+    if (r.offspring.petId) byOffspring.set(r.offspring.petId, r);
+    for (const pid of [r.host.petId, r.challenger.petId]) {
+      if (!pid) continue;
+      (byParent.get(pid) ?? byParent.set(pid, []).get(pid)!).push(r);
+    }
+  }
+  return { byOffspring, byParent, rows };
+}
+
+// Batch node metadata for a set of pet ids: name, faction, rarity, sex, art, plus a top trait
+// (Surger preferred, else highest tier) resolved from pet_traits.
+async function nodeMeta(ids: number[]): Promise<Map<number, { name: string | null; faction: string | null; rarity: number | null; sex: "male" | "female" | null; imgUrl: string | null; topTrait: string | null; racesRun: number | null }>> {
+  const out = new Map<number, { name: string | null; faction: string | null; rarity: number | null; sex: "male" | "female" | null; imgUrl: string | null; topTrait: string | null; racesRun: number | null }>();
+  const uniq = [...new Set(ids.filter((id) => id > 0))];
+  if (uniq.length === 0) return out;
+  const traitsById = new Map<number, { id: string; tier: number | null; name: string | null }[]>();
+  for (let i = 0; i < uniq.length; i += 500) {
+    const chunk = uniq.slice(i, i + 500);
+    const [{ data: pets }, { data: traits }] = await Promise.all([
+      db().from("pets").select("id, name, faction_name, rarity, gender, img_url, races_run").in("id", chunk),
+      db().from("pet_traits").select("pet_id, trait_id, trait_name, tier").in("pet_id", chunk),
+    ]);
+    for (const t of traits ?? []) (traitsById.get(t.pet_id as number) ?? traitsById.set(t.pet_id as number, []).get(t.pet_id as number)!).push({ id: t.trait_id as string, tier: t.tier as number | null, name: t.trait_name as string | null });
+    for (const p of pets ?? []) {
+      const sexStr = typeof p.gender === "string" ? (p.gender as string).toLowerCase() : "";
+      out.set(p.id as number, { name: (p.name as string) ?? null, faction: (p.faction_name as string) ?? null, rarity: p.rarity as number | null, sex: sexStr === "male" || sexStr === "female" ? sexStr : null, imgUrl: (p.img_url as string) ?? null, topTrait: null, racesRun: p.races_run as number | null });
+    }
+  }
+  const topTraitOf = (petId: number): string | null => {
+    const ts = (traitsById.get(petId) ?? []).filter((t) => t.id);
+    if (ts.length === 0) return null;
+    if (ts.find((t) => t.id === "surger")) return "Surger";
+    const best = ts.slice().sort((a, b) => (b.tier ?? 0) - (a.tier ?? 0))[0];
+    return best?.name ?? null;
+  };
+  for (const id of uniq) { const m = out.get(id); if (m) m.topTrait = topTraitOf(id); }
+  return out;
+}
+
+// Descendant valuation range from pet_scores (reuse the existing pet valuation model). Sums the
+// bands of descendants that actually have comps; labeled thin when few. Never fabricated.
+async function bloodlineValue(ids: number[]): Promise<BloodlineAnalytics["value"]> {
+  const uniq = [...new Set(ids.filter((id) => id > 0))];
+  if (uniq.length === 0) return { lowEth: null, highEth: null, n: 0, thin: true };
+  let low = 0, high = 0, n = 0;
+  for (let i = 0; i < uniq.length; i += 500) {
+    const { data } = await db().from("pet_scores").select("valuation_low_eth, valuation_high_eth, valuation_comps").in("pet_id", uniq.slice(i, i + 500));
+    for (const s of data ?? []) {
+      const comps = (s.valuation_comps ?? {}) as { thin?: boolean };
+      if (s.valuation_low_eth == null || s.valuation_high_eth == null || comps.thin) continue;
+      low += Number(s.valuation_low_eth); high += Number(s.valuation_high_eth); n++;
+    }
+  }
+  return n > 0 ? { lowEth: Math.round(low * 10000) / 10000, highEth: Math.round(high * 10000) / 10000, n, thin: n < 3 } : { lowEth: null, highEth: null, n: 0, thin: true };
+}
+
+// The three analytics over a set of "line duels" (rows where a line member is a parent) and the
+// descendant offspring ids. Climb is observed vs the official-table expectation for those pairings;
+// trait concentration is over descendant offspring whose traits have revealed (honest denominator).
+async function bloodlineAnalytics(lineRows: DuelTrainingRow[], descendantIds: number[], meta: Map<number, { topTrait: string | null; racesRun: number | null }>): Promise<BloodlineAnalytics> {
+  let observed = 0, total = 0; const pairs: [number, number][] = [];
+  for (const r of lineRows) {
+    if (r.lowerParentRarity == null || r.offspring.rarity == null) continue;
+    total++; if (r.offspring.rarity > r.lowerParentRarity) observed++;
+    if (r.host.rarity != null && r.challenger.rarity != null) pairs.push([Math.min(r.host.rarity, r.challenger.rarity), Math.max(r.host.rarity, r.challenger.rarity)]);
+  }
+  const expectedPct = expectedRateAcross(pairs, "climb").pct;
+
+  // Trait concentration over descendant offspring that have REVEALED traits (racesRun > 0).
+  const counts = new Map<string, number>(); let revealed = 0;
+  for (const id of descendantIds) {
+    const m = meta.get(id); if (!m || (m.racesRun ?? 0) === 0 || !m.topTrait) continue;
+    revealed++; counts.set(m.topTrait, (counts.get(m.topTrait) ?? 0) + 1);
+  }
+  let dominant: string | null = null, dCount = 0;
+  for (const [k, v] of counts) if (v > dCount) { dCount = v; dominant = k; }
+  const trait = { dominant, count: dCount, revealed, note: revealed === 0 ? "Offspring traits reveal only as they race; none in this line have revealed yet." : `${dCount} of ${revealed} revealed offspring carry ${dominant}.` };
+
+  const value = await bloodlineValue(descendantIds);
+  return { climb: { observed, total, expectedPct }, trait, value };
+}
+
+export async function getLineage(focalId: number): Promise<Lineage | null> {
+  const rows = await loadDuelTraining();
+  const { byOffspring, byParent } = lineageMaps(rows);
+  const isGenesis = !byOffspring.has(focalId);
+  // The focal must exist as a pet OR appear in the graph, else nothing to show.
+  const seedRow = byOffspring.get(focalId);
+  const parentRows = byParent.get(focalId) ?? [];
+  if (!seedRow && parentRows.length === 0) {
+    // still return a minimal genesis/leaf node if the pet exists, so the dossier can show "starts here"
+    const metaOnly = await nodeMeta([focalId]);
+    if (!metaOnly.has(focalId)) return null;
+  }
+
+  // Ancestors: walk parents up to genesis (currently 1 level; recursion is future-proof).
+  const ancestorEntries: { id: number; role: "fell" | "survived"; depth: number; generation: number }[] = [];
+  const walkUp = (childId: number, depth: number) => {
+    const row = byOffspring.get(childId); if (!row) return;
+    for (const parentId of [row.host.petId, row.challenger.petId]) {
+      if (!parentId) continue;
+      const role: "fell" | "survived" = row.loserPetId === parentId ? "fell" : "survived";
+      ancestorEntries.push({ id: parentId, role, depth, generation: Math.max(1, (row.offspring.generation ?? 2) - 1) });
+      walkUp(parentId, depth + 1);
+    }
+  };
+  walkUp(focalId, 1);
+
+  // Descendants: BFS via byParent, dedupe, cap depth 6.
+  const descEntries: { id: number; depth: number; generation: number }[] = [];
+  const seen = new Set<number>([focalId]);
+  let frontier = [focalId];
+  for (let depth = 1; depth <= 6 && frontier.length; depth++) {
+    const next: number[] = [];
+    for (const pid of frontier) {
+      for (const r of byParent.get(pid) ?? []) {
+        const oid = r.offspring.petId;
+        if (!oid || seen.has(oid)) continue;
+        seen.add(oid); descEntries.push({ id: oid, depth, generation: r.offspring.generation ?? 2 }); next.push(oid);
+      }
+    }
+    frontier = next;
+  }
+
+  // Direct offspring, with the focal's role in each duel.
+  const directOffspring = parentRows.map((r) => ({ id: r.offspring.petId, role: (r.loserPetId === focalId ? "fell" : "survived") as "fell" | "survived", generation: r.offspring.generation ?? 2 })).filter((o) => o.id);
+
+  // Line duels: every duel where the focal or a descendant is a parent (generalizes past gen 2).
+  const lineMembers = new Set<number>([focalId, ...descEntries.map((d) => d.id)]);
+  const lineRows = rows.filter((r) => lineMembers.has(r.host.petId) || lineMembers.has(r.challenger.petId));
+
+  const allIds = [focalId, ...ancestorEntries.map((a) => a.id), ...descEntries.map((d) => d.id)];
+  const meta = await nodeMeta(allIds);
+  const focalGen = seedRow?.offspring.generation ?? 1;
+  const node = (id: number, extra: Partial<LineageNode>): LineageNode => {
+    const m = meta.get(id);
+    return { id, name: m?.name ?? null, rarity: rarityRef(m?.rarity ?? null), faction: m?.faction ?? null, generation: extra.generation ?? 1, sex: m?.sex ?? null, topTrait: m?.topTrait ?? null, imgUrl: m?.imgUrl ?? null, ...extra };
+  };
+
+  const analytics = await bloodlineAnalytics(lineRows, descEntries.map((d) => d.id), meta);
+  const generations = new Set<number>([focalGen, ...descEntries.map((d) => d.generation)]);
+
+  return {
+    focal: node(focalId, { generation: focalGen }),
+    isGenesis,
+    ancestors: ancestorEntries.map((a) => node(a.id, { role: a.role, depth: a.depth, generation: a.generation })),
+    offspring: directOffspring.map((o) => node(o.id, { role: o.role, depth: 1, generation: o.generation })),
+    descendants: descEntries.map((d) => node(d.id, { depth: d.depth, generation: d.generation })),
+    analytics,
+    counts: { totalDescendants: descEntries.length, generationsSpanned: generations.size, directOffspring: directOffspring.length },
+  };
+}
+
+// ---- Founders leaderboard: genesis Giglings seeding dynasties -------------------------------
+const FOUNDER_SCORE_EXPLAINER = "Founder Score = direct offspring count + realized climb rate + dominant-trait concentration, each shown so the blend is auditable, never a black box.";
+
+export async function getFounders(sort: "offspring" | "climb" | "value" = "offspring", limit = 50, offset = 0): Promise<FoundersResponse> {
+  const rows = await loadDuelTraining();
+  const { byOffspring, byParent } = lineageMaps(rows);
+  // Genesis parents = pets that are a parent in >=1 duel and are NOT themselves an offspring.
+  const founderIds = [...byParent.keys()].filter((id) => !byOffspring.has(id));
+  if (founderIds.length === 0) return { rows: [], total: 0, sort, scoreExplainer: FOUNDER_SCORE_EXPLAINER };
+
+  // Node metadata for founders + their whole descendant sets (for value + trait concentration).
+  const allDescendants = new Set<number>();
+  const descByFounder = new Map<number, number[]>();
+  for (const fid of founderIds) {
+    const seen = new Set<number>([fid]); let frontier = [fid]; const desc: number[] = [];
+    for (let depth = 1; depth <= 6 && frontier.length; depth++) {
+      const next: number[] = [];
+      for (const pid of frontier) for (const r of byParent.get(pid) ?? []) { const oid = r.offspring.petId; if (!oid || seen.has(oid)) continue; seen.add(oid); desc.push(oid); next.push(oid); allDescendants.add(oid); }
+      frontier = next;
+    }
+    descByFounder.set(fid, desc);
+  }
+  const meta = await nodeMeta([...founderIds, ...allDescendants]);
+
+  // Owner address per founder from pets.
+  const ownerByFounder = new Map<number, string | null>();
+  for (let i = 0; i < founderIds.length; i += 500) {
+    const { data } = await db().from("pets").select("id, owner_address").in("id", founderIds.slice(i, i + 500));
+    for (const p of data ?? []) ownerByFounder.set(p.id as number, (p.owner_address as string) ?? null);
+  }
+  const ownerNames = await lookupUsernames([...new Set([...ownerByFounder.values()].filter((a): a is string => !!a))]);
+
+  const built: FounderRow[] = [];
+  for (const fid of founderIds) {
+    const m = meta.get(fid); if (!m) continue;
+    const desc = descByFounder.get(fid) ?? [];
+    const lineMembers = new Set<number>([fid, ...desc]);
+    const lineRows = rows.filter((r) => lineMembers.has(r.host.petId) || lineMembers.has(r.challenger.petId));
+    let observed = 0, total = 0; const pairs: [number, number][] = [];
+    const gens = new Set<number>([1]);
+    for (const r of lineRows) {
+      if (r.lowerParentRarity != null && r.offspring.rarity != null) { total++; if (r.offspring.rarity > r.lowerParentRarity) observed++; }
+      if (r.host.rarity != null && r.challenger.rarity != null) pairs.push([Math.min(r.host.rarity, r.challenger.rarity), Math.max(r.host.rarity, r.challenger.rarity)]);
+      if (r.offspring.generation != null) gens.add(r.offspring.generation);
+    }
+    const expectedPct = expectedRateAcross(pairs, "climb").pct;
+    // Trait concentration over revealed descendant offspring.
+    const counts = new Map<string, number>(); let revealed = 0;
+    for (const id of desc) { const dm = meta.get(id); if (!dm || (dm.racesRun ?? 0) === 0 || !dm.topTrait) continue; revealed++; counts.set(dm.topTrait, (counts.get(dm.topTrait) ?? 0) + 1); }
+    let dominantTrait: string | null = null, dCount = 0;
+    for (const [k, v] of counts) if (v > dCount) { dCount = v; dominantTrait = k; }
+    // A founder's own trait is the line hypothesis when nothing has revealed yet.
+    if (!dominantTrait) dominantTrait = m.topTrait;
+    const value = await bloodlineValue(desc);
+    const directOffspring = (byParent.get(fid) ?? []).length;
+    const concentration = revealed > 0 ? dCount / revealed : 0;
+    const climbRate = total > 0 ? observed / total : 0;
+    // Transparent blend: offspring count (scaled) + climb rate + concentration. Components shown.
+    const score = Math.round((directOffspring * 10 + climbRate * 100 + concentration * 20) * 10) / 10;
+    const owner = ownerByFounder.get(fid) ?? null;
+    built.push({
+      id: fid, name: m.name, ownerAddress: owner, ownerName: owner ? ownerNames.get(owner) ?? null : null,
+      rarity: rarityRef(m.rarity), faction: m.faction, sex: m.sex, topTrait: m.topTrait, imgUrl: m.imgUrl,
+      directOffspring, generationsSpanned: gens.size,
+      climb: { observed, total, expectedPct },
+      dominantTrait, value,
+      score, scoreParts: { offspring: directOffspring, climb: Math.round(climbRate * 1000) / 10, concentration: Math.round(concentration * 1000) / 10 },
+    });
+  }
+  const sorters: Record<string, (a: FounderRow, b: FounderRow) => number> = {
+    offspring: (a, b) => b.directOffspring - a.directOffspring || b.score - a.score,
+    climb: (a, b) => (b.climb.total ? b.climb.observed / b.climb.total : 0) - (a.climb.total ? a.climb.observed / a.climb.total : 0) || b.directOffspring - a.directOffspring,
+    value: (a, b) => (b.value.highEth ?? 0) - (a.value.highEth ?? 0) || b.directOffspring - a.directOffspring,
+  };
+  built.sort(sorters[sort] ?? sorters.offspring);
+  return { rows: built.slice(offset, offset + limit), total: built.length, sort, scoreExplainer: FOUNDER_SCORE_EXPLAINER };
 }

@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { getDuelGlobalStats, getDuelTraining } from "@/lib/api/queries";
+import { getDuelGlobalStats, getDuelTraining, getFounders } from "@/lib/api/queries";
 import { fetchDuelConfig } from "@/lib/duel";
 import { formatInt, formatEth } from "@/lib/format";
 import DuelFeed from "@/components/duel/DuelFeed";
 import DuelStudio from "@/components/duel/DuelStudio";
 import BreedingExplainer from "@/components/duel/BreedingExplainer";
+import FoundersPanel from "@/components/duel/FoundersPanel";
 
 const GIGA_DUEL_URL = "https://gigaverse.io/duel";
 
@@ -21,10 +22,11 @@ export const revalidate = 30;
 // Race Finder. Out of scope for this page; the feed below teaches from RESOLVED duels only.
 
 export default async function DuelPage() {
-  const [stats, config, training] = await Promise.all([
+  const [stats, config, training, founders] = await Promise.all([
     getDuelGlobalStats(),
     fetchDuelConfig(),
     getDuelTraining(),
+    getFounders("offspring", 5, 0),
   ]);
 
   const feeEth = stats ? formatEth(Number(stats.challengeFeesWei) / 1e18, 3).replace(" ETH", "") : "0";
@@ -108,6 +110,9 @@ export default async function DuelPage() {
           <p className="type-data text-ink-faint">The training set has not been fit yet.</p>
         )}
       </section>
+
+      {/* Surface 2, Placement B: top-5 Bloodline Founders, linking to the full Intel board. */}
+      <FoundersPanel rows={founders.rows} />
     </div>
   );
 }
