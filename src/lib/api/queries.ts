@@ -1998,6 +1998,7 @@ export async function getJuiceRevenue(): Promise<JuiceRevenueHome | null> {
 // ---- Duel: parent lookup + deterministic preview (read-only) -------------------------------
 import { breedingPreview, duelbornGeneration, RARITY_TIERS, type ParentInput, type BreedingPreview, type Rarity } from "../duelRules";
 import { predictRarity, rarityValue, statFloorFor, type DuelModel, type RarityPrediction, type DuelTraining, type DuelTrainingRow, DUEL_TRAINING_KEY } from "../ingest/duelModel";
+import { officialClimbPct, officialTraitTierOdds, glueFor } from "../duelOdds";
 
 async function loadDuelModel(): Promise<DuelModel | null> {
   const { data } = await db().from("sync_state").select("value").eq("key", "duel_model_v1").maybeSingle();
@@ -2007,8 +2008,12 @@ async function loadDuelModel(): Promise<DuelModel | null> {
 // Load a parent's duel-relevant fields from indexed pet data. Stats use the revealed-range
 // midpoint per stat. duelsLeft comes from the duel-index snapshot (null if the pet has not dueled).
 export async function getDuelParent(petId: number, duelsLeftByPet?: Record<string, number>, genByPet?: Record<string, number>): Promise<ParentInput | null> {
-  const { data: p } = await db().from("pets").select("*").eq("id", petId).maybeSingle();
+  const [{ data: p }, { data: traitRows }] = await Promise.all([
+    db().from("pets").select("*").eq("id", petId).maybeSingle(),
+    db().from("pet_traits").select("trait_id, trait_name, tier").eq("pet_id", petId),
+  ]);
   if (!p) return null;
+  const traits = (traitRows ?? []).map((t) => ({ id: t.trait_id as string, name: (t.trait_name as string | null) ?? traitMeta(t.trait_id as string).name, tier: t.tier as number | null }));
   const mid = (a: unknown, b: unknown) => (a != null && b != null ? Math.round((Number(a) + Number(b)) / 2) : null);
   const s = mid(p.start_min, p.start_max), sp = mid(p.speed_min, p.speed_max), st = mid(p.stamina_min, p.stamina_max), f = mid(p.finish_min, p.finish_max);
   const rarityIdx = p.rarity as number | null;
@@ -2026,14 +2031,37 @@ export async function getDuelParent(petId: number, duelsLeftByPet?: Record<strin
     racesRun: (p.races_run as number | null) ?? null,
     duelsLeft: duelsLeftByPet && duelsLeftByPet[String(petId)] != null ? duelsLeftByPet[String(petId)] : null,
     stats: s != null && sp != null && st != null && f != null ? { start: s, speed: sp, stamina: st, finish: f } : null,
+    traits,
   };
+}
+
+// Traits BOTH parents carry, with each parent's star tier and the OFFICIAL "if inherited" tier
+// odds. Shared traits are far more likely to be chosen, so this is real breeding guidance; we never
+// claim which slots fill.
+export interface SharedTraitOdds { id: string; name: string; aTier: number; bTier: number; odds: [number, number, number] | null }
+type TraitLite = { id: string; name: string | null; tier: number | null };
+function sharedTraitList(aTraits: TraitLite[], bTraits: TraitLite[]): SharedTraitOdds[] {
+  const bById = new Map(bTraits.filter((t) => t.id).map((t) => [t.id, t]));
+  const out: SharedTraitOdds[] = [];
+  for (const t of aTraits) {
+    const bt = bById.get(t.id); if (!bt) continue;
+    const aTier = t.tier ?? 1, bTier = bt.tier ?? 1;
+    out.push({ id: t.id, name: t.name ?? traitMeta(t.id).name, aTier, bTier, odds: officialTraitTierOdds(aTier, bTier) });
+  }
+  // Surger first (the study's dominant trait), then by combined tier.
+  return out.sort((x, y) => (y.id === "surger" ? 1 : 0) - (x.id === "surger" ? 1 : 0) || (y.aTier + y.bTier) - (x.aTier + x.bTier));
+}
+function sharedTraits(a: ParentInput, b: ParentInput): SharedTraitOdds[] {
+  return sharedTraitList(a.traits ?? [], b.traits ?? []);
 }
 
 // Modeled (empirical) outcomes, each carrying its sample size N and basis. Separate from the
 // deterministic facts in BreedingPreview.
 export interface ModeledOutcome {
   modelN: number;
-  rarity: RarityPrediction;
+  rarity: RarityPrediction;          // distribution is OFFICIAL; rarity.observed is the empirical check
+  officialClimbPct: number | null;   // official P(offspring rarity > lower parent)
+  sharedTraits: SharedTraitOdds[];   // traits both parents carry, with official "if inherited" tier odds
   statFloor: { floor: number | null; n: number }; // offspring stat-range minimum for the most-likely rarity
   faction: { inheritRatePct: number; n: number } | null;
   fall: { note: string; n: number }; // honest: the fall is chosen via Host Favour, deterministic at extremes
@@ -2095,9 +2123,15 @@ export async function getDuelPreview(petIdA: number, petIdB: number): Promise<Du
     const netEth = burnedEth != null && gainedEth != null ? Math.round((gainedEth - burnedEth) * 10000) / 10000 : null;
     const vv = valuationVerdict(burnedEth, gainedEth, burnLow.n, gain.n);
     const floor = statFloorFor(model, rarity.mostLikely);
+    // Reglue alternative: instead of sacrificing the lower parent, its glue can be recovered. Cite
+    // the deglue yield / reglue cost of the lower-rarity parent so the "is it worth it" is complete.
+    const glue = glueFor(Math.min(ra, rb));
+    const glueNote = glue.deglueYield != null ? ` Or reglue the parent instead (deglue value ${glue.deglueYield} glue; reglue costs ${glue.reglueCost}, up to 3 times) to keep racing it.` : "";
     modeled = {
       modelN: model.n,
       rarity,
+      officialClimbPct: officialClimbPct(ra, rb),
+      sharedTraits: sharedTraits(a, b),
       statFloor: floor,
       faction: { inheritRatePct: Math.round(model.faction.inheritRate * 100), n: model.faction.n },
       fall: { note: model.fall.note, n: model.fall.n },
@@ -2106,9 +2140,9 @@ export async function getDuelPreview(petIdA: number, petIdB: number): Promise<Du
       valuation: {
         burnedEth, burnedSource: `typical ${RARITY_TIERS[Math.min(ra, rb)] ?? "tier"} sale (N=${burnLow.n})`,
         gainedEth, gainedN: gain.n,
-        netEth, verdict: vv.verdict, note: vv.note,
+        netEth, verdict: vv.verdict, note: vv.note + glueNote,
       },
-      caveat: `Modeled from ${model.n} real duels. Probabilities carry their sample size; thin pairings fall back to the documented rule. Traits and exact stats reveal only through racing and are not predicted.`,
+      caveat: `Rarity, trait-tier, faction, glue, and generation odds are the official Gigaverse tables; observed columns are Paddock's ${model.n} real duels as a check. Traits and exact stats reveal only through racing and are not predicted.`,
     };
   }
   return { a, b, preview, modeled };
@@ -2120,7 +2154,7 @@ export type PairingGoal = "best" | "rarity" | "preserve" | "cheapest";
 interface ParentProfile {
   petId: number; name: string | null; sex: "male" | "female" | null; rarityName: string | null; rarityIdx: number;
   generation: number; cq: number; upside: number; bestDistance: number; elo: number | null; winRate: number | null;
-  topTrait: string | null; valueEth: number | null; quality: number; // quality = the single racer-strength number we rank on
+  topTrait: string | null; traits: TraitLite[]; valueEth: number | null; quality: number; // quality = the single racer-strength number we rank on
 }
 
 export interface PairingParentRef {
@@ -2131,13 +2165,14 @@ export interface PairingSuggestion {
   male: PairingParentRef;
   female: PairingParentRef;
   predictedRarity: { name: string; pct: number; n: number; basis: string };
-  distribution: { rarity: number; name: string; pct: number }[];
-  distributionN: number;          // cell total behind the distribution (0 when documented-rule)
-  distributionBasis: "data" | "documented";
-  upgradeChancePct: number;       // P(offspring rarity > the lower parent rarity)
-  climbObserved: { count: number; total: number } | null; // observed climbs / cell total (data basis only)
-  expectedRarity: number;         // probability-weighted mean offspring rarity (the CHASE RARITY metric)
-  reachStableMaxPct: number;      // P(offspring rarity >= the stable's highest parent rarity)
+  distribution: { rarity: number; name: string; pct: number }[]; // OFFICIAL when on-table
+  distributionN: number;          // empirical observation count backing the observed column
+  distributionBasis: "official" | "documented";
+  upgradeChancePct: number;       // OFFICIAL P(offspring rarity > the lower parent rarity)
+  climbObserved: { count: number; total: number } | null; // observed climbs / cell total (empirical check)
+  sharedTraits: SharedTraitOdds[]; // traits both parents carry, with official if-inherited tier odds
+  expectedRarity: number;         // official probability-weighted mean offspring rarity (CHASE RARITY metric)
+  reachStableMaxPct: number;      // official P(offspring rarity >= the stable's highest parent rarity)
   generation: number | null;
   statFloor: number | null;
   faction: { inheritRatePct: number; n: number } | null;
@@ -2194,6 +2229,7 @@ async function parentProfiles(ids: number[], genByPet: Record<string, number>): 
       rarityName: rarityIdx >= 0 && rarityIdx < RARITY_TIERS.length ? RARITY_TIERS[rarityIdx] : null, rarityIdx,
       generation: genByPet[String(id)] ?? 1, cq, upside, bestDistance: Number(s?.best_distance ?? 1200),
       elo: p.elo != null ? Number(p.elo) : null, winRate, topTrait: topTraitOf(id),
+      traits: (traitsById.get(id) ?? []).filter((t) => t.id).map((t) => ({ id: t.id, name: t.name, tier: t.tier })),
       valueEth, quality: cq > 0 ? cq : upside,
     });
   }
@@ -2244,6 +2280,7 @@ export async function getBestPairings(address: string, goal: PairingGoal = "best
       const generation = duelbornGeneration(pm.generation, pf.generation);
       const floor = statFloorFor(model, pred.mostLikely).floor;
       const climbObserved = observedClimb(model, ra, rb);
+      const pairShared = sharedTraitList(pm.traits, pf.traits);
 
       // Who falls. Forced: the final-duel pet falls, deterministically. Otherwise the breeder's
       // choice, so we recommend the weaker racer (or the cheaper one for the "cheapest" goal).
@@ -2283,8 +2320,8 @@ export async function getBestPairings(address: string, goal: PairingGoal = "best
         female: parentRef(pf, rf.isFinal),
         predictedRarity: { name: pred.distribution[0]?.name ?? "?", pct: pred.distribution[0]?.pct ?? 0, n: pred.n, basis: pred.basis },
         distribution: pred.distribution, distributionN: pred.n, distributionBasis: pred.basis,
-        upgradeChancePct, climbObserved,
-        expectedRarity: Math.round(expectedRarity * 100) / 100, reachStableMaxPct,
+        upgradeChancePct: Math.round(upgradeChancePct * 10) / 10, climbObserved, sharedTraits: pairShared,
+        expectedRarity: Math.round(expectedRarity * 100) / 100, reachStableMaxPct: Math.round(reachStableMaxPct * 10) / 10,
         generation, statFloor: floor,
         faction: model ? { inheritRatePct: Math.round(model.faction.inheritRate * 100), n: model.faction.n } : null,
         fallenPetId: fallen.petId, keptPetId: kept.petId, offspringGender: fallen.sex,
@@ -2352,6 +2389,9 @@ export interface DuelTrainingResponse {
   n: number;
   rows: DuelTrainingRow[];
   aggregates: DuelTraining["aggregates"];
+  officialExpected: DuelTraining["officialExpected"];
+  maxGeneration: number;
+  open: DuelTraining["open"];
   accuracy: DuelModel["backtest"] | null;
   statFloor: DuelModel["statFloor"] | null;
   generatedAt: string | null;
@@ -2395,6 +2435,9 @@ export async function getDuelTraining(): Promise<DuelTrainingResponse | null> {
     n: training.n,
     rows,
     aggregates: training.aggregates,
+    officialExpected: training.officialExpected ?? { holdPct: 0, climbPct: 0, n: 0 },
+    maxGeneration: training.maxGeneration ?? 2,
+    open: training.open ?? { count: 0, minFeeWei: "0" },
     accuracy: model?.backtest ?? null,
     statFloor: model?.statFloor ?? null,
     generatedAt: training.generatedAt ?? null,

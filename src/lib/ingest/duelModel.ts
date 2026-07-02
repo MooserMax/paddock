@@ -1,6 +1,7 @@
 import { setSyncState } from "../syncState";
 import { db } from "../db";
 import { RARITY_TIERS } from "../duelRules";
+import { officialRarityDist, expectedRateAcross } from "../duelOdds";
 import { hydrateMissingPets } from "./pets";
 
 // Empirical duel-outcome model, fit from REAL resolved duels (the labeled dataset: parent A +
@@ -48,8 +49,9 @@ async function getJson(url: string, tries = 5): Promise<{ listings?: Listing[]; 
 }
 
 // Paginate the whole feed until hasMore is false (never truncate as the set grows). The 200-page
-// cap is only a runaway guard; today the resolved set is a handful of pages.
-async function fetchAllResolved(maxPages = 200): Promise<Listing[]> {
+// cap is only a runaway guard; today the feed is a handful of pages. Returns ALL listings so the
+// caller can partition RESOLVED (training) from OPEN (the live open-challenges tile).
+async function fetchAllListings(maxPages = 200): Promise<Listing[]> {
   const out: Listing[] = []; let cursor: string | undefined;
   for (let i = 0; i < maxPages; i++) {
     const j = await getJson(`${LISTINGS_API}?limit=20${cursor ? `&cursor=${cursor}` : ""}`);
@@ -57,7 +59,16 @@ async function fetchAllResolved(maxPages = 200): Promise<Listing[]> {
     if (!j.pageInfo?.hasMore || !j.pageInfo?.nextCursor) break;
     cursor = j.pageInfo.nextCursor;
   }
-  return out.filter((l) => l.phaseName === "RESOLVED" && l.offspring?.id != null);
+  return out;
+}
+
+// The live open Challenger's Duels (phase OPEN): a count and the minimum listed fee, for the
+// actionable open-challenges tile. Computed from the same fetched feed, refreshed on the cron.
+function openChallenges(all: Listing[]): { count: number; minFeeWei: string } {
+  const open = all.filter((l) => String(l.phaseName ?? "").toUpperCase() === "OPEN");
+  let min: bigint | null = null;
+  for (const l of open) { const w = BigInt(l.priceWei ?? "0"); if (min == null || w < min) min = w; }
+  return { count: open.length, minFeeWei: (min ?? 0n).toString() };
 }
 
 const mid = (r?: Rng) => (r && r.min != null && r.max != null ? (r.min + r.max) / 2 : null);
@@ -142,6 +153,12 @@ export interface DuelTraining {
     paid: { count: number; totalWei: string; avgWei: string };
     forced: { count: number };
   };
+  // What the OFFICIAL tables expect for THIS dataset's pairing mix (observed-vs-official credibility).
+  officialExpected: { holdPct: number; climbPct: number; n: number };
+  // Highest Duelborn generation minted so far (the generation frontier).
+  maxGeneration: number;
+  // Live open Challenger's Duels, captured on the same cron.
+  open: { count: number; minFeeWei: string };
   generatedAt: string;
 }
 
@@ -149,7 +166,7 @@ function trainingParent(p?: DuelPet): DuelTrainingParent {
   return { petId: Number(p?.id ?? 0), rarity: p?.rarity ?? null, sex: p?.sex ?? null, topTrait: topTrait(p) };
 }
 
-function buildTraining(R: Listing[]): DuelTraining {
+function buildTraining(R: Listing[], open: { count: number; minFeeWei: string }): DuelTraining {
   const rows: DuelTrainingRow[] = [];
   let hold = 0, climb = 0, slip = 0, rarN = 0;
   let paidCount = 0, paidTotal = 0n, forced = 0;
@@ -171,6 +188,15 @@ function buildTraining(R: Listing[]): DuelTraining {
     });
   }
   rows.sort((a, b) => b.listingId - a.listingId);
+  // Official expected hold/climb across this dataset's actual pairing mix.
+  const pairs: [number, number][] = [];
+  let maxGeneration = 0;
+  for (const l of R) {
+    const a = l.hostPet?.rarity, b = l.challengerPet?.rarity;
+    if (a != null && b != null) pairs.push([Math.min(a, b), Math.max(a, b)]);
+    if (l.offspring?.generation != null) maxGeneration = Math.max(maxGeneration, l.offspring.generation);
+  }
+  const exp = expectedRateAcross(pairs, "hold"), expClimb = expectedRateAcross(pairs, "climb");
   return {
     n: R.length,
     rows,
@@ -179,12 +205,17 @@ function buildTraining(R: Listing[]): DuelTraining {
       paid: { count: paidCount, totalWei: paidTotal.toString(), avgWei: (paidCount ? paidTotal / BigInt(paidCount) : 0n).toString() },
       forced: { count: forced },
     },
+    officialExpected: { holdPct: exp.pct, climbPct: expClimb.pct, n: exp.n },
+    maxGeneration,
+    open,
     generatedAt: new Date().toISOString(),
   };
 }
 
 export async function fitDuelModel(): Promise<DuelModel> {
-  const R = await fetchAllResolved();
+  const all = await fetchAllListings();
+  const R = all.filter((l) => l.phaseName === "RESOLVED" && l.offspring?.id != null);
+  const open = openChallenges(all);
   const n = R.length;
 
   // RARITY: per (lo,hi) parent-rarity pair, distribution of (offspring - lo). Backtest = the rule
@@ -294,7 +325,7 @@ export async function fitDuelModel(): Promise<DuelModel> {
 
   // Store the per-row training set (Part 1) and hydrate any duel pet missing from our pets table
   // (Part 0 backfill: offspring + parents that appear in a duel but were never synced as racers).
-  const training = buildTraining(R);
+  const training = buildTraining(R, open);
   await setSyncState(DUEL_TRAINING_KEY, training);
   const petIds: number[] = [];
   for (const row of training.rows) { petIds.push(row.host.petId, row.challenger.petId, row.offspring.petId); if (row.loserPetId) petIds.push(row.loserPetId); if (row.survivorPetId) petIds.push(row.survivorPetId); }
@@ -318,29 +349,38 @@ export function rarityValue(model: DuelModel | null, rarity: number): { medianEt
 
 // ---- Prediction from the fitted model (pure, used by the preview + recommender) ------------
 
-export interface RarityPrediction { distribution: { rarity: number; name: string; pct: number }[]; mostLikely: number; n: number; basis: "data" | "documented" }
+export interface RarityPrediction {
+  distribution: { rarity: number; name: string; pct: number }[]; // official when the pair is on-table
+  mostLikely: number; n: number; basis: "official" | "documented";
+  observed: { holdPct: number; climbPct: number; n: number } | null; // empirical validation layer
+}
 
-// Predict offspring rarity distribution for two parent rarities, from the empirical per-pair
-// table when N >= 5, else the documented rule (centered on the lower parent, capped climb, small
-// slip) with basis flagged as thin.
+// Predict offspring rarity distribution for two parent rarities. The OFFICIAL Gigaverse odds tables
+// are authoritative; the empirical fit is demoted to a validation layer surfaced as `observed`.
+// Off-table pairs (e.g. a Common parent) fall back to the documented rule.
 export function predictRarity(model: DuelModel | null, rarityA: number, rarityB: number): RarityPrediction {
   const lo = Math.min(rarityA, rarityB), hi = Math.max(rarityA, rarityB);
-  const cell = model?.rarity.byPair[`${lo},${hi}`];
   const name = (idx: number) => RARITY_TIERS[idx] ?? `tier ${idx}`;
-  if (cell && cell.total >= 5) {
-    const dist = Object.entries(cell.offsets)
-      .map(([off, c]) => ({ rarity: lo + Number(off), name: name(lo + Number(off)), pct: Math.round((c / cell.total) * 100) }))
-      .sort((a, b) => b.pct - a.pct);
-    return { distribution: dist, mostLikely: dist[0].rarity, n: cell.total, basis: "data" };
+  const cell = model?.rarity.byPair[`${lo},${hi}`];
+  const observed = cell && cell.total > 0
+    ? {
+        holdPct: Math.round(((cell.offsets["0"] ?? 0) / cell.total) * 100),
+        climbPct: Math.round((Object.entries(cell.offsets).reduce((s, [o, c]) => s + (Number(o) > 0 ? c : 0), 0) / cell.total) * 100),
+        n: cell.total,
+      }
+    : null;
+  const official = officialRarityDist(rarityA, rarityB);
+  if (official) {
+    return { distribution: official, mostLikely: official[0].rarity, n: observed?.n ?? 0, basis: "official", observed };
   }
-  // Documented fallback: ~85% at the lower parent, ~10% climb +1 (capped below the higher), ~5% slip.
+  // Documented fallback for off-table pairs: ~85% at the lower parent, ~10% climb +1, ~5% slip.
   const climbCap = Math.min(lo + 1, hi);
   const dist = [
     { rarity: lo, name: name(lo), pct: 85 },
     ...(climbCap > lo ? [{ rarity: climbCap, name: name(climbCap), pct: 10 }] : []),
     ...(lo > 0 ? [{ rarity: lo - 1, name: name(lo - 1), pct: 5 }] : []),
   ].sort((a, b) => b.pct - a.pct);
-  return { distribution: dist, mostLikely: lo, n: cell?.total ?? 0, basis: "documented" };
+  return { distribution: dist, mostLikely: lo, n: cell?.total ?? 0, basis: "documented", observed };
 }
 
 // Offspring stat-range minimum for a given offspring rarity: a near-deterministic lookup with the

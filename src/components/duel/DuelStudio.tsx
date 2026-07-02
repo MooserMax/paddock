@@ -29,9 +29,13 @@ interface Backtest { rarity: Acc; generation: Acc; gender: Acc; faction: Acc; st
 interface Acc { correct: number; n: number }
 type Verdict = "worth" | "even" | "not" | "unknown";
 interface Valuation { burnedEth: number | null; gainedEth: number | null; netEth: number | null; verdict: Verdict; note: string }
+interface Observed { holdPct: number; climbPct: number; n: number }
+interface SharedTrait { id: string; name: string; aTier: number; bTier: number; odds: [number, number, number] | null }
 interface Modeled {
   modelN: number;
-  rarity: { distribution: RarityDist[]; mostLikely: number; n: number; basis: string };
+  rarity: { distribution: RarityDist[]; mostLikely: number; n: number; basis: string; observed: Observed | null };
+  officialClimbPct: number | null;
+  sharedTraits: SharedTrait[];
   statFloor: { floor: number | null; n: number };
   faction: { inheritRatePct: number; n: number } | null;
   fall: { note: string; n: number };
@@ -48,6 +52,7 @@ interface Suggestion {
   predictedRarity: { name: string; pct: number; n: number; basis: string };
   distribution: RarityDist[]; distributionN: number; distributionBasis: string;
   upgradeChancePct: number; climbObserved: { count: number; total: number } | null;
+  sharedTraits: SharedTrait[];
   expectedRarity: number; reachStableMaxPct: number;
   generation: number | null; statFloor: number | null;
   faction: { inheritRatePct: number; n: number } | null;
@@ -124,9 +129,20 @@ function Skeleton({ rows = 3 }: { rows?: number }) {
   );
 }
 
+// Official climb odds, with the empirical observation shown alongside when we have it.
 function climbText(s: Suggestion): string {
-  if (s.distributionBasis === "data" && s.climbObserved) return `${s.upgradeChancePct}% climbed (${s.climbObserved.count} of ${s.climbObserved.total} observed)`;
-  return `${s.upgradeChancePct}% climb (rule-based, thin data n=${s.distributionN})`;
+  const off = `official ${s.upgradeChancePct}% climb`;
+  if (s.climbObserved) return `${off}, observed ${Math.round((s.climbObserved.count / s.climbObserved.total) * 100)}% (${s.climbObserved.count} of ${s.climbObserved.total})`;
+  return off;
+}
+
+function TraitOdds({ t }: { t: SharedTrait }) {
+  return (
+    <p className="type-data text-ink-soft">
+      Both carry <span className="text-ink">{t.name}</span>: {t.aTier}-star x {t.bTier}-star{" "}
+      {t.odds ? <span style={{ color: "var(--gold)" }}>-&gt; {t.odds[0]}% / {t.odds[1]}% / {t.odds[2]}% (1/2/3-star) if inherited</span> : "if inherited"}
+    </p>
+  );
 }
 
 function PairingDetail({ s }: { s: Suggestion }) {
@@ -139,13 +155,19 @@ function PairingDetail({ s }: { s: Suggestion }) {
   return (
     <div className="mt-3 space-y-3 border-t pt-3 hairline">
       <div>
-        <p className="type-micro uppercase tracking-wider text-ink-faint">Offspring rarity distribution {s.distributionBasis === "data" ? `(from ${s.distributionN} similar duels)` : "(rule-based, thin data)"}</p>
+        <p className="type-micro uppercase tracking-wider text-ink-faint">Offspring rarity distribution {s.distributionBasis === "official" ? "(official Gigaverse odds)" : "(rule-based, off-table)"}{s.climbObserved ? ` · observed in ${s.climbObserved.total} similar duels` : ""}</p>
         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
           {s.distribution.map((d, i) => (
             <span key={i} className="type-data text-ink-soft"><span style={{ color: "var(--gold)" }}>{d.name}</span> {d.pct}%</span>
           ))}
         </div>
       </div>
+      {s.sharedTraits.length > 0 && (
+        <div>
+          <p className="type-micro uppercase tracking-wider text-ink-faint">Shared traits (far more likely to be inherited)</p>
+          <div className="mt-1 space-y-0.5">{s.sharedTraits.map((t) => <TraitOdds key={t.id} t={t} />)}</div>
+        </div>
+      )}
       <div className="flex flex-wrap gap-x-6 gap-y-1 type-data text-ink-soft">
         <span>Stat floor {s.statFloor ?? "?"} to a ceiling of 100</span>
         {s.faction && <span>Faction inherited {s.faction.inheritRatePct}% of the time (N={s.faction.n})</span>}
@@ -354,7 +376,7 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
                       <span className="type-micro uppercase tracking-wider" style={{ color: v.color }}>{v.label}</span>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 type-data text-ink-soft">
-                      <span>Duelborn <span style={{ color: "var(--gold)" }}>{s.predictedRarity.name} {s.predictedRarity.pct}%</span>{s.predictedRarity.basis !== "data" ? " (rule)" : ""}</span>
+                      <span>Duelborn <span style={{ color: "var(--gold)" }}>{s.predictedRarity.name} {s.predictedRarity.pct}%</span>{s.predictedRarity.basis === "documented" ? " (rule)" : ""}</span>
                       <span>gen {s.generation ?? "?"}</span>
                       {s.statFloor != null && <span>floor {s.statFloor}</span>}
                       <span className={s.upgradeChancePct > 0 ? "" : "text-ink-faint"} style={s.upgradeChancePct > 0 ? { color: "var(--gold)" } : undefined}>{climbText(s)}</span>
@@ -448,7 +470,7 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
             </Block>
 
             {preview.modeled && (
-              <Block label={`Modeled odds, from ${preview.modeled.modelN} real duels`} tone="var(--cyan)">
+              <Block label="Official odds for this pairing" tone="var(--cyan)">
                 <p className="type-data text-ink">
                   Offspring rarity:{" "}
                   {preview.modeled.rarity.distribution.slice(0, 4).map((d, i) => (
@@ -456,10 +478,17 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
                   ))}
                 </p>
                 <p className="type-micro mt-0.5 normal-case text-ink-faint">
-                  {preview.modeled.rarity.basis === "data" ? `fit from ${preview.modeled.rarity.n} duels with this parent-rarity pair` : `this pairing is thin in the data (n=${preview.modeled.rarity.n}); using the documented rule (centered on the lower parent, capped climb, small slip)`}
+                  {preview.modeled.rarity.basis === "official" ? "official Gigaverse table" : "off-table pairing; documented rule (centered on the lower parent)"}
+                  {preview.modeled.rarity.observed ? `; observed here: held ${preview.modeled.rarity.observed.holdPct}%, climbed ${preview.modeled.rarity.observed.climbPct}% (n=${preview.modeled.rarity.observed.n})` : ""}
                 </p>
+                {preview.modeled.sharedTraits.length > 0 && (
+                  <div className="mt-2">
+                    <p className="type-micro uppercase tracking-wider text-ink-faint">Shared traits (far more likely to be inherited)</p>
+                    <div className="mt-1 space-y-0.5">{preview.modeled.sharedTraits.map((t) => <TraitOdds key={t.id} t={t} />)}</div>
+                  </div>
+                )}
                 {preview.modeled.faction && (
-                  <p className="type-data mt-2 text-ink">Faction: <span className="text-ink-soft">offspring takes a parent&apos;s faction {preview.modeled.faction.inheritRatePct}% of the time (N={preview.modeled.faction.n})</span></p>
+                  <p className="type-data mt-2 text-ink">Faction: <span className="text-ink-soft">offspring takes a parent&apos;s faction {preview.modeled.faction.inheritRatePct}% of the time (observed N={preview.modeled.faction.n})</span></p>
                 )}
                 <p className="type-data mt-1 text-ink-soft">{preview.modeled.traitsNote}</p>
               </Block>
@@ -481,11 +510,11 @@ export default function DuelStudio({ minRaces, modelN, accuracy }: { minRaces: n
             )}
 
             {accuracy && (
-              <Block label="Model accuracy (backtested on the resolved set)" tone="var(--ink-faint)">
+              <Block label="Observed vs official (Paddock's resolved duels)" tone="var(--ink-faint)">
                 <p className="type-data text-ink-soft">
-                  Rarity {accuracy.rarity.correct}/{accuracy.rarity.n} · generation {accuracy.generation.correct}/{accuracy.generation.n} · gender {accuracy.gender.correct}/{accuracy.gender.n} · faction {accuracy.faction.correct}/{accuracy.faction.n} · stat floor {accuracy.statFloor.correct}/{accuracy.statFloor.n}
+                  Rarity held {accuracy.rarity.correct}/{accuracy.rarity.n} · generation {accuracy.generation.correct}/{accuracy.generation.n} · gender {accuracy.gender.correct}/{accuracy.gender.n} · faction {accuracy.faction.correct}/{accuracy.faction.n} · stat floor {accuracy.statFloor.correct}/{accuracy.statFloor.n}
                 </p>
-                <p className="type-micro mt-1 normal-case text-ink-faint">Modeled from {modelN} resolved duels on-chain. Traits and exact stats reveal only through racing and are not predicted.</p>
+                <p className="type-micro mt-1 normal-case text-ink-faint">Odds are the official Gigaverse tables; these counts are our {modelN} real resolved duels as a check. Traits and exact stats reveal only through racing and are not predicted.</p>
               </Block>
             )}
 

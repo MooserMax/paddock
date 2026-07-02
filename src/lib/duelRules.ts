@@ -56,6 +56,7 @@ export interface ParentInput {
   racesRun: number | null;
   duelsLeft: number | null; // null = unknown (assume MAX until indexed)
   stats?: { start: number; speed: number; stamina: number; finish: number } | null;
+  traits?: { id: string; name: string | null; tier: number | null }[]; // for shared-trait breeding guidance
 }
 
 export type Outcome<T> = { status: "certain" | "odds" | "pending"; value?: T; note: string };
